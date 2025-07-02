@@ -6,9 +6,13 @@ at a constant rate over the transformation period.
 """
 
 import numpy as np
+import sys
+import os
 from abc import ABC, abstractmethod
 
-from ..backtest import OptimizationInput
+# Add parent directory to path to find backtest module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from backtest import OptimizationInput
 
 
 class TransformationPolicy(ABC):
@@ -137,7 +141,7 @@ def create_uniform_strategy_function(w_initial: np.ndarray, w_target: np.ndarray
     Returns:
         Strategy function compatible with run_backtest()
     """
-    from .. import transformation
+    import transformation
     
     policy = UniformTransformationPolicy()
     config = transformation.TransformationConfig(w_initial, w_target, total_days)
@@ -156,7 +160,7 @@ def create_dynamic_uniform_strategy_function(w_initial: np.ndarray, w_target: np
     Returns:
         Strategy function compatible with run_backtest()
     """
-    from .. import transformation
+    import transformation
     
     policy = DynamicUniformTransformationPolicy()
     config = transformation.TransformationConfig(w_initial, w_target, total_days)

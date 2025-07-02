@@ -8,9 +8,13 @@ costs and risk through asset-by-asset optimization.
 
 import numpy as np
 import cvxpy as cp
+import sys
+import os
 from typing import Optional
 
-from ..backtest import OptimizationInput
+# Add parent directory to path to find backtest module
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from backtest import OptimizationInput
 from .uniform_policy import TransformationPolicy
 
 
@@ -200,7 +204,7 @@ def create_univariate_strategy_function(
     Returns:
         Strategy function compatible with run_backtest()
     """
-    from .. import transformation
+    import transformation
     
     policy = UnivariateScalarTrackingPolicy(
         risk_aversion=risk_aversion,
