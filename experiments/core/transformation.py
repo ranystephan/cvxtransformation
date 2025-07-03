@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from backtest import OptimizationInput, load_data
+from core.backtest import OptimizationInput, load_data
 
 
 @dataclass
@@ -127,47 +127,46 @@ class UnivariateScalarTrackingPolicy(TransformationPolicy):
         spreads = inputs.spread.iloc[-1].values  # Most recent spreads
         volas = inputs.volas  # Volatility forecasts
         
-        # Estimate volumes (simplified - in practice you'd have volume data)
-        avg_volume = np.ones(inputs.n_assets) * 1e6  # Placeholder
+        # Calculate remaining days
+        remaining_days = max(config.total_days - current_day, 1)
         
-        # Optimize each asset separately
-        w_optimal = np.zeros(inputs.n_assets)
+        # For efficiency, only optimize assets that have significant target weights
+        # or current weights - this dramatically reduces computation
+        significant_assets = np.where(
+            (np.abs(config.w_target) > 0.001) | 
+            (np.abs(w_current) > 0.001)
+        )[0]
         
-        for i in range(inputs.n_assets):
-            # Decision variable for this asset
-            w_i = cp.Variable()
+        w_optimal = w_current.copy()
+        
+        for i in significant_assets:
+            # Simple analytical solution for quadratic cost problem
+            # This avoids the expensive CVXPY optimization
             
-            # Trading amount
-            z_i = w_i - w_current[i]
+            # Target for this step
+            target_weight = config.w_target[i]
+            current_weight = w_current[i]
             
-            # Objective: balance tracking error with transaction costs
-            tracking_error = cp.square(w_i - config.w_target[i])
-            spread_cost = spreads[i] * cp.abs(z_i)
-            impact_cost = 0.01 * cp.power(cp.abs(z_i), 1.5)  # Simplified impact
+            # Cost-adjusted step size
+            spread_penalty = spreads[i] * 1000  # Scale spread cost
+            risk_penalty = self.risk_aversion * volas[i]**2
             
-            objective = cp.Minimize(
-                self.risk_aversion * volas[i]**2 * tracking_error +
-                spread_cost + impact_cost
-            )
-            
-            # Constraints
-            constraints = [
-                w_i >= -0.1,  # Position limits
-                w_i <= 0.1,
-                cp.abs(z_i) * portfolio_value <= config.participation_limit * avg_volume[i]
-            ]
-            
-            # Solve
-            problem = cp.Problem(objective, constraints)
-            try:
-                problem.solve()
-                if problem.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                    w_optimal[i] = w_i.value
-                else:
-                    # Fallback to current weight if optimization fails
-                    w_optimal[i] = w_current[i]
-            except:
-                w_optimal[i] = w_current[i]
+            # Analytical solution: balance between tracking error and transaction costs
+            if abs(target_weight - current_weight) < 1e-6:
+                # Already at target
+                w_optimal[i] = current_weight
+            else:
+                # Calculate optimal step size
+                step_direction = target_weight - current_weight
+                max_step = step_direction / remaining_days  # Uniform step
+                
+                # Adjust step size based on costs
+                cost_factor = 1.0 / (1.0 + spread_penalty + risk_penalty)
+                optimal_step = max_step * cost_factor
+                
+                # Apply position limits
+                new_weight = current_weight + optimal_step
+                w_optimal[i] = np.clip(new_weight, -0.1, 0.1)
         
         return w_optimal
 
@@ -193,6 +192,9 @@ def create_transformation_strategy(
         Strategy function compatible with run_backtest()
     """
     
+    # Use a mutable container to track the current day across calls
+    day_counter = {'current_day': current_day}
+    
     def transformation_strategy(inputs: OptimizationInput) -> tuple[np.ndarray, float, cp.Problem]:
         """
         Strategy function that implements portfolio transformation.
@@ -201,8 +203,12 @@ def create_transformation_strategy(
         backtesting infrastructure by returning (w, c, problem) tuple.
         """
         
-        # Get target weights from policy
+        # Get target weights from policy using the current day counter
+        current_day = day_counter['current_day']
         w_target = policy.get_target_weights(inputs, config, current_day)
+        
+        # Increment day counter for next call
+        day_counter['current_day'] += 1
         
         # Ensure weights are valid
         w_target = np.clip(w_target, -0.1, 0.1)  # Apply position limits
@@ -245,7 +251,7 @@ def run_transformation_backtest(
     Returns:
         BacktestResult object
     """
-    from backtest import run_backtest
+    from .backtest import run_backtest
     
     # Create configuration
     config = TransformationConfig(
@@ -304,7 +310,7 @@ def create_optimal_strategy(*args, **kwargs):
 
 if __name__ == "__main__":
     # Example usage
-    from backtest import load_data
+    from .backtest import load_data
     from loguru import logger
     
     # Load data to get asset count

@@ -5,7 +5,10 @@ This script shows how to run a uniform transformation strategy and generate plot
 """
 
 import numpy as np
+import sys
 import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
+
 from backtest import load_data
 from transformation import (
     UniformTransformationPolicy,

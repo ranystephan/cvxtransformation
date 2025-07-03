@@ -5,14 +5,18 @@ This script compares all three transformation strategies and generates plots for
 """
 
 import numpy as np
+import sys
 import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
+
 from backtest import load_data
+
 from transformation import (
     UniformTransformationPolicy,
     DynamicUniformTransformationPolicy,
+    UnivariateScalarTrackingPolicy,
     run_transformation_backtest
 )
-from transformations.univariate_policy import UnivariateScalarTrackingPolicy
 from dashboard import create_dashboard_from_backtest
 
 def compare_transformation_strategies():

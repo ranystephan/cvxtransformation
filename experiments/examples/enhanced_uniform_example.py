@@ -6,7 +6,10 @@ for complete dashboard plots including trades analysis and weights heatmap.
 """
 
 import numpy as np
+import sys
 import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
+
 from backtest import load_data
 from transformation import (
     UniformTransformationPolicy,

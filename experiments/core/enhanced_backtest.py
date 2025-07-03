@@ -12,11 +12,11 @@ from typing import Callable, Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 import cvxpy as cp
 
-from backtest import (
+from core.backtest import (
     load_data, OptimizationInput, BacktestResult, Timing,
     create_orders, execute_orders, interest_and_fees
 )
-from dashboard import DetailedBacktestResult, BacktestDashboard
+from core.dashboard import DetailedBacktestResult, BacktestDashboard
 
 
 @dataclass
@@ -58,7 +58,8 @@ def run_enhanced_backtest(
     risk_target: float, 
     strategy_name: str = "Unknown",
     strategy_params: Dict = None,
-    verbose: bool = False
+    verbose: bool = False,
+    max_days: Optional[int] = None
 ) -> EnhancedBacktestResult:
     """
     Run an enhanced backtest that captures detailed data for dashboard creation.
@@ -69,6 +70,7 @@ def run_enhanced_backtest(
         strategy_name: Name of the strategy for labeling
         strategy_params: Dictionary of strategy parameters
         verbose: Whether to print progress
+        max_days: Maximum number of days to backtest (useful for transformation strategies)
         
     Returns:
         EnhancedBacktestResult with detailed tracking data
@@ -110,7 +112,7 @@ def run_enhanced_backtest(
     returns = prices.pct_change().dropna()
     
     # Import synthetic_returns from utils
-    from utils import synthetic_returns
+    from .utils import synthetic_returns
     
     means = (
         synthetic_returns(prices, information_ratio=0.15, forward_smoothing=forward_smoothing)
@@ -155,8 +157,13 @@ def run_enhanced_backtest(
     
     # Update indices to only include valid days
     indices = [i for i in indices if prices.index[i] in valid_days]
+    
+    # Limit backtest duration if specified (useful for transformation strategies)
+    if max_days is not None:
+        indices = indices[:max_days]
+    
     if verbose:
-        print(f"Valid days for backtest: {len(valid_days)} out of {len(days)}")
+        print(f"Valid days for backtest: {len(indices)} out of {len(valid_days)}")
 
     # Extract shorting fees function (same as original)
     def get_shorting_fees(short_fee_data, asset_names, date):
@@ -173,12 +180,15 @@ def run_enhanced_backtest(
         return np.array(fees)
 
     # Main backtest loop with enhanced tracking
-    for t in indices:
+    if verbose:
+        print(f"Starting backtest loop with {len(indices)} days...")
+    
+    for i, t in enumerate(indices):
         start_time = time.perf_counter()
         day = prices.index[t]
 
         if verbose:
-            print(f"Day {t} of {len(prices)-forward_smoothing}, {day}")
+            print(f"Day {i+1}/{len(indices)}: {day}")
 
         # Prepare input data
         prices_t = prices.iloc[t - lookback : t + 1]
@@ -329,7 +339,7 @@ def run_transformation_with_dashboard(
     save_path: Optional[str] = None
 ):
     """Example: Run transformation strategy with dashboard."""
-    from transformation import create_transformation_strategy
+    from .transformation import create_transformation_strategy
     
     strategy = create_transformation_strategy(transformation_config)
     

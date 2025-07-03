@@ -5,7 +5,7 @@ import cvxpy as cp
 import numpy as np
 import pandas as pd
 
-__folder = Path(__file__).parent
+__folder = Path(__file__).resolve().parent
 
 
 def checkpoints_path() -> Path:
@@ -17,7 +17,8 @@ def figures_path() -> Path:
 
 
 def data_path() -> Path:
-    return __folder.parent / "data_ranycs"
+    # Go up from experiments/core/ to project root, then to data_ranycs
+    return __folder.parent.parent / "data_ranycs"
 
 
 def experiment_path() -> Path:
