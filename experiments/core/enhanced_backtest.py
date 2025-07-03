@@ -261,19 +261,19 @@ def run_enhanced_backtest(
         end_time = time.perf_counter()
         timings.append(Timing.get_timing(start_time, end_time, problem))
 
-    # Create result DataFrames
-    backtest_dates = prices.index[lookback:-forward_smoothing]
+    # Create result DataFrames - use actual processed dates
+    actual_backtest_dates = [prices.index[t] for t in indices]
     
-    post_trade_cash = pd.Series(post_trade_cash, index=backtest_dates)
-    post_trade_quantities = pd.DataFrame(post_trade_quantities, index=backtest_dates, columns=prices.columns)
+    post_trade_cash = pd.Series(post_trade_cash, index=actual_backtest_dates)
+    post_trade_quantities = pd.DataFrame(post_trade_quantities, index=actual_backtest_dates, columns=prices.columns)
     
     # Detailed tracking DataFrames
-    daily_trades_df = pd.DataFrame(daily_trades_list, index=backtest_dates, columns=prices.columns)
-    daily_weights_df = pd.DataFrame(daily_weights_list, index=backtest_dates, columns=prices.columns)
-    daily_prices_df = pd.DataFrame(daily_prices_list, index=backtest_dates, columns=prices.columns)
-    daily_spreads_df = pd.DataFrame(daily_spreads_list, index=backtest_dates, columns=prices.columns)
-    daily_target_weights_df = pd.DataFrame(daily_target_weights_list, index=backtest_dates, columns=prices.columns)
-    daily_costs_df = pd.DataFrame(daily_costs_list, index=backtest_dates)
+    daily_trades_df = pd.DataFrame(daily_trades_list, index=actual_backtest_dates, columns=prices.columns)
+    daily_weights_df = pd.DataFrame(daily_weights_list, index=actual_backtest_dates, columns=prices.columns)
+    daily_prices_df = pd.DataFrame(daily_prices_list, index=actual_backtest_dates, columns=prices.columns)
+    daily_spreads_df = pd.DataFrame(daily_spreads_list, index=actual_backtest_dates, columns=prices.columns)
+    daily_target_weights_df = pd.DataFrame(daily_target_weights_list, index=actual_backtest_dates, columns=prices.columns)
+    daily_costs_df = pd.DataFrame(daily_costs_list, index=actual_backtest_dates)
 
     # Create enhanced result
     result = EnhancedBacktestResult(
