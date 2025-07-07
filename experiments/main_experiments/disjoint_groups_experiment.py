@@ -9,11 +9,20 @@ policies perform when moving between distinct asset universes.
 import numpy as np
 import pandas as pd
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Sequence
 import sys
 import os
 import signal
 import time
+import logging
+import json
+
+# Optional progress bar; falls back to no-op if tqdm unavailable
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = lambda x, **kwargs: x  # type: ignore
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from core.backtest import load_data
@@ -51,50 +60,97 @@ def calculate_max_drawdown(returns: pd.DataFrame) -> pd.Series:
     drawdown = (cumulative - running_max) / running_max
     return drawdown.min()
 
-def create_asset_groups(asset_metrics: pd.DataFrame, n_assets: int) -> Dict[str, List[int]]:
-    """Create disjoint asset groups based on risk characteristics."""
-    
-    # Sort assets by volatility
-    sorted_by_vol = asset_metrics.sort_values('volatility')
-    
-    # Create groups with different risk profiles
-    group_size = min(25, n_assets // 10)  # Reasonable group size
-    
-    groups = {
-        'low_vol': sorted_by_vol.head(group_size).index.tolist(),
-        'high_vol': sorted_by_vol.tail(group_size).index.tolist(),
-        'high_sharpe': asset_metrics.nlargest(group_size, 'sharpe_proxy').index.tolist(),
-        'low_correlation': asset_metrics.nsmallest(group_size, 'market_correlation').index.tolist()
+def create_asset_groups(
+    asset_metrics: pd.DataFrame,
+    n_assets: int,
+    min_group_size: int = 5,
+) -> Dict[str, List[str]]:
+    """Create (roughly) disjoint asset groups based on risk characteristics.
+
+    If after deduplication a group is smaller than *min_group_size*, extra assets
+    are pulled (without replacement) from the leftover universe to meet the
+    size requirement.  A warning is logged whenever this happens.
+    """
+
+    sorted_by_vol = asset_metrics.sort_values("volatility")
+
+    group_size = min(25, n_assets // 10)  # heuristic size
+
+    raw_groups: Dict[str, List[str]] = {
+        "low_vol": sorted_by_vol.head(group_size).index.tolist(),
+        "high_vol": sorted_by_vol.tail(group_size).index.tolist(),
+        "high_sharpe": asset_metrics.nlargest(group_size, "sharpe_proxy").index.tolist(),
+        "low_correlation": asset_metrics.nsmallest(group_size, "market_correlation").index.tolist(),
     }
-    
-    # Ensure disjoint groups by removing overlaps
-    used_assets = set()
-    clean_groups = {}
-    
-    for group_name, assets in groups.items():
-        clean_assets = [a for a in assets if a not in used_assets][:group_size//2]  # Smaller to avoid overlaps
-        if len(clean_assets) >= 3:  # Minimum viable group size
-            clean_groups[group_name] = clean_assets
-            used_assets.update(clean_assets)
-    
+
+    # Build disjoint groups
+    used_assets: set[str] = set()
+    clean_groups: Dict[str, List[str]] = {}
+
+    for name, asset_list in raw_groups.items():
+        group_assets = [a for a in asset_list if a not in used_assets]
+
+        # Ensure minimum viable size
+        if len(group_assets) < min_group_size:
+            # Grab additional assets (still avoiding overlap)
+            additional_candidates = [a for a in asset_metrics.index if a not in used_assets and a not in group_assets]
+            needed = min_group_size - len(group_assets)
+            group_assets.extend(additional_candidates[:needed])
+
+            if len(group_assets) < min_group_size:
+                logging.warning(
+                    f"Group '{name}' only has {len(group_assets)} assets (<{min_group_size}). Experiment results may be unstable."
+                )
+
+        if group_assets:
+            clean_groups[name] = group_assets
+            used_assets.update(group_assets)
+
     return clean_groups
 
-def create_minimum_variance_portfolio(asset_names: List[str], prices: pd.DataFrame, target_risk: float = 0.10) -> np.ndarray:
-    """Create a minimum variance portfolio for given assets with target risk."""
+def create_minimum_variance_portfolio(
+    asset_names: Sequence[str],
+    prices: pd.DataFrame,
+    target_risk: float = 0.10,
+    method: str = "equal",
+) -> np.ndarray:
+    """Construct a simple proxy for a minimum-variance portfolio.
+
+    Parameters
+    ----------
+    asset_names   : List/Sequence of tickers to include.
+    prices        : Full price DataFrame.
+    target_risk   : Total weight assigned to this group (acts as risk proxy).
+    method        : "equal" (default) ⇒ equal-weight inside the group.
+                    "inv_var" ⇒ inverse-variance weighting using the last 252-day
+                    sample variance of each asset.
+    """
+
     n_assets = prices.shape[1]
     w = np.zeros(n_assets)
-    
-    if len(asset_names) == 0:
+
+    if not asset_names:
         return w
-    
-    # Equal weight within the group as a simple proxy for minimum variance
-    weight_per_asset = target_risk / len(asset_names)
-    
-    for asset_name in asset_names:
-        if asset_name in prices.columns:
-            asset_idx = prices.columns.get_loc(asset_name)
-            w[asset_idx] = weight_per_asset
-    
+
+    asset_names = [a for a in asset_names if a in prices.columns]
+    if not asset_names:
+        return w
+
+    if method == "inv_var":
+        returns = prices[asset_names].pct_change().dropna()
+        variances = returns.var()
+        # Guard against zero variance
+        inv_var = 1.0 / np.where(variances == 0, 1e-8, variances)
+        raw_weights = inv_var / inv_var.sum()
+    else:  # equal weight fallback
+        raw_weights = np.ones(len(asset_names)) / len(asset_names)
+
+    scaled_weights = raw_weights * target_risk
+
+    for asset_name, weight in zip(asset_names, scaled_weights):
+        idx = prices.columns.get_loc(asset_name)
+        w[idx] = weight
+
     return w
 
 def run_disjoint_groups_experiment():
@@ -154,7 +210,7 @@ def run_disjoint_groups_experiment():
     
     results = []
     
-    for scenario in scenarios:
+    for scenario in tqdm(scenarios, desc="Scenarios"):
         print(f"\n{'-'*60}")
         print(f"SCENARIO: {scenario['name']}")
         print(f"Description: {scenario['description']}")
@@ -219,6 +275,28 @@ def run_disjoint_groups_experiment():
                         print(f"  ERROR: Backtest timed out after 30 seconds")
                         continue
                     
+                    # Validate result; skip if too short (e.g., all days skipped)
+                    if not is_valid_result(result):
+                        logging.warning("Result for %s/%s/%sd is invalid (too few days). Skipping.", scenario['name'], policy_name, period)
+                        continue
+
+                    # Compute average L1 tracking error if data available
+                    tracking_error = np.nan
+                    if not result.daily_weights.empty and not result.daily_target_weights.empty:
+                        diff = result.daily_weights.sub(result.daily_target_weights, fill_value=0)
+                        tracking_error = diff.abs().sum(axis=1).mean()
+
+                    # Build weight snapshots
+                    init_w_dict = {prices.columns[i]: w for i, w in enumerate(w_initial) if abs(w) > 0}
+                    target_w_dict = {prices.columns[i]: w for i, w in enumerate(w_target) if abs(w) > 0}
+                    final_w_dict = (
+                        result.daily_weights.iloc[-1].round(6).loc[lambda s: s != 0].to_dict()
+                        if not result.daily_weights.empty else {}
+                    )
+
+                    # Policy hyper-parameters (public attrs only)
+                    policy_params = {k: v for k, v in vars(policy).items() if not k.startswith("_")}
+
                     # Store results
                     results.append({
                         'scenario': scenario['name'],
@@ -230,6 +308,12 @@ def run_disjoint_groups_experiment():
                         'turnover': result.turnover,
                         'max_leverage': result.max_leverage,
                         'max_drawdown': result.max_drawdown,
+                        'tracking_error': tracking_error,
+                        'initial_weights': _to_compact_json(init_w_dict),
+                        'target_weights': _to_compact_json(target_w_dict),
+                        'final_weights': _to_compact_json(final_w_dict),
+                        'policy_params': json.dumps(policy_params),
+                        'risk_target': 0.08,
                         'result': result
                     })
                     
@@ -294,6 +378,26 @@ def run_disjoint_groups_experiment():
     else:
         print("No results to analyze - all experiments failed!")
         return None
+
+# ---------------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------------
+
+def is_valid_result(result, min_days: int = 5) -> bool:
+    """Basic sanity-check to ensure backtest produced data."""
+    try:
+        return len(result.portfolio_value) >= min_days
+    except Exception:
+        return False
+
+# ---------------------------------------------------------------------------
+# Helper for serialising weight dictionaries
+# ---------------------------------------------------------------------------
+
+def _to_compact_json(mapping: Dict[str, float]) -> str:
+    """Serialize dict to a compact JSON string for CSV storage."""
+    # Keep only non-zero weights for brevity
+    return json.dumps({k: round(v, 6) for k, v in mapping.items() if abs(v) > 1e-8})
 
 if __name__ == "__main__":
     run_disjoint_groups_experiment() 
