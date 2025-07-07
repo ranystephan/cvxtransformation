@@ -133,8 +133,8 @@ def run_backtest(strategy: Callable, risk_target: float, verbose: bool = False) 
             assert fee_col in short_fee_data.columns, f"Missing shorting fee for {asset}"
             fee = short_fee_data.loc[date, fee_col]
             # Convert from annual basis points to daily decimal
-            # e.g., 0.25% annual = 0.0025/252 daily
-            fees.append(fee / 100 / 252 if not pd.isna(fee) else 0.0)
+            # e.g., 0.25% annual = 0.0025/360 daily
+            fees.append(fee / 100 / 360 if not pd.isna(fee) else 0.0)
         return np.array(fees)
 
     # ranycs change starts here
@@ -217,7 +217,7 @@ def run_backtest(strategy: Callable, risk_target: float, verbose: bool = False) 
 
         mean_t = means.loc[day]  # Forecast for return t to t+1
         covariance_t = covariances[day]  # Forecast for covariance t to t+1
-        chol_t = cholesky_factorizations[day]
+        chol_t = cholesky_factorizations[day] 
         volas_t = np.sqrt(np.diag(covariance_t.values))
 
         # Get shorting fees for current day
@@ -237,7 +237,7 @@ def run_backtest(strategy: Callable, risk_target: float, verbose: bool = False) 
         )
 
         # Runtime checks for NaNs/Infs in portfolio state before optimization
-        latest_prices = prices.iloc[t]
+        latest_prices = prices.iloc[t] # At t
         portfolio_value = cash + quantities @ latest_prices
         if (
             np.isnan(quantities).any() or np.isinf(quantities).any()

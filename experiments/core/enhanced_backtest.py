@@ -176,7 +176,7 @@ def run_enhanced_backtest(
             fee_col = f'fee_{asset}'
             assert fee_col in short_fee_data.columns, f"Missing shorting fee for {asset}"
             fee = short_fee_data.loc[date, fee_col]
-            fees.append(fee / 100 / 252 if not pd.isna(fee) else 0.0)
+            fees.append(fee / 100 / 360 if not pd.isna(fee) else 0.0)
         return np.array(fees)
 
     # Main backtest loop with enhanced tracking
