@@ -1,0 +1,432 @@
+\documentclass[11pt, letterpaper]{article}
+
+% PACKAGES
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs} % For professional-looking tables
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{verbatim} % For verbatim text blocks
+\usepackage{lscape}   % For landscape tables if needed
+\usepackage{xcolor}   % For colors if needed
+
+% DOCUMENT INFORMATION
+\title{Comprehensive Data Analysis and Validation Report}
+\author{Rany Stephan}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% --- SUMMARY PARAGRAPH ---
+\begin{abstract}
+This report describes how we processed and explored a financial dataset for S\&P 500 stocks from 2015 to 2024. The main data came from the CRSP database and included prices, volumes, and dividends. We added short-borrowing fee data from Interactive Brokers. The raw data was adjusted for splits and dividends, bid-ask spreads were calculated, and missing values were handled systematically. We analyzed the cleaned datasets for prices, spreads, and short fees to check their statistical properties and look for any oddities. The results show the data quality is good. Finally, we compared our data to a Markowitz reference dataset and found that our processed data is within a normal range. Note that the backtests can also work on the Markowitz data. We can also compare results of backtests with and without the real short fees. 
+\end{abstract}
+
+\clearpage
+
+% --- DATA PROCESSING SECTION ---
+\section{Data Processing}
+The raw dataset was sourced from the Center for Research in Security Prices (CRSP) database, utilizing the following fields: PERMNO, date, SHRCD, TICKER, DISTCD, DIVAMT, PRC, VOL, RET, BID, ASK, CFACPR, and CFACSHR. The dataset underwent several processing stages.
+
+Several columns were added to the dataset based on the following formulas:
+\begin{itemize}
+    \item \textbf{DIV\_CASH:} This column was created to isolate cash dividends. Its value is equal to \texttt{DIVAMT} if the distribution code (\texttt{DISTCD}) starts with '1' (indicating an ordinary or special cash dividend), and 0 otherwise.
+    
+    \item \textbf{Split-Adjusted Columns:} The price, volume, and bid/ask values were adjusted for stock splits using the cumulative factors provided by CRSP.
+    \begin{itemize}
+        \item $\text{PRC\_SPLIT\_ADJ} = \text{PRC} / \text{CFACPR}$
+        \item $\text{VOL\_ADJ} = \text{VOL} / \text{CFACSHR}$
+        \item $\text{BID\_ADJ} = \text{BID} / \text{CFACPR}$
+        \item $\text{ASK\_ADJ} = \text{ASK} / \text{CFACPR}$
+    \end{itemize}
+    
+    \item \textbf{ADJ\_CLOSE:} A total-return adjusted closing price was calculated. This was done by first creating a daily return factor: $(\text{PRC\_SPLIT\_ADJ} + \text{DIV\_CASH}) / \text{PRC\_SPLIT\_ADJ.shift(1)}$. A cumulative product of these factors generated a total return index, which was then rescaled so its final value matched the final \texttt{PRC\_SPLIT\_ADJ}.
+    
+    \item \textbf{Spread Columns:} Two metrics for the bid-ask spread were calculated.
+    \begin{itemize}
+        \item $\text{SPREAD} = \text{ASK\_ADJ} - \text{BID\_ADJ}$
+        \item $\text{REL\_SPREAD} = \text{SPREAD} / ((\text{ASK\_ADJ} + \text{BID\_ADJ}) / 2)$
+    \end{itemize}
+\end{itemize}
+Finally, the dataset was filtered to retain only the tickers belonging to the S\&P 500 index, and the resulting data was pivoted and saved into separate files for prices, returns, spreads, and volumes.
+
+% --- DATA EXPLORATION SECTION ---
+\section{Data Exploration (Before Filtering)}
+
+\subsection{NaN Report: prices.csv}
+\begin{verbatim}
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+total_stocks                  : 500   # Total number of stocks in the dataset
+total_dates                   : 2,385 # Total number of trading dates
+total_span_days               : 3,460 # Total calendar days from earliest to latest
+stocks_no_nans                : 428   # Stocks with no missing data
+stocks_with_nans              : 72    # Stocks with at least one missing value
+stocks_internal_gaps_only     : 2     # Stocks with gaps in middle
+stocks_born_late              : 70    # Stocks that start after the earliest date
+stocks_dead_early             : 0     # Stocks that end before the latest date
+stocks_middle_only            : 0     # Stocks that start late and end early
+stocks_full_period            : 430   # Stocks that span the entire period
+stocks_complete_coverage      : 498   # Stocks with no gaps in their own series
+avg_missing_%                 : 6.86  # Average percentage of missing data
+median_missing_%              : 0.00  # Median percentage of missing data
+max_missing_%                 : 94.80 # Highest percentage of missing data
+min_missing_%                 : 0.00  # Lowest percentage of missing data
+std_missing_%                 : 19.56 # Std dev of missing percentages
+total_missing_values          : 81,758  # Total count of all missing data points
+total_data_points             : 1,192,500 # Total possible data points
+overall_completeness_%        : 93.14 # Percentage of present data points
+
+STOCK LISTS
+--------------------------------------------------------------------------------
+born_late            : 70 stocks  # Stocks that started trading after dataset begins
+                       ABNB, AMCR, APTV, AXON, BALL ... and 65 more
+dead_early           : 0 stocks   # Stocks that stopped trading before dataset ends
+middle_only          : 0 stocks   # Stocks that both started late and ended early
+internal_gaps_only   : 2 stocks   # Stocks with full period but internal gaps
+                       DXCM, SMCI
+full_period          : 430 stocks # Stocks that span the entire time period
+                       A, AAPL, ABBV, ABT, ACGL ... and 425 more
+complete_coverage    : 498 stocks # Stocks with no missing data within their series
+                       A, AAPL, ABBV, ABNB, ABT ... and 493 more
+no_nans              : 428 stocks # Stocks with zero missing data points overall
+                       A, AAPL, ABBV, ABT, ACGL ... and 423 more
+worst_10             : 10 stocks  # Stocks with highest percentage of missing data
+                       SW, GEV, SOLV, CPAY, DOC, DAY, VLTO, COR, EG, FI
+best_10              : 10 stocks  # Stocks with lowest percentage of missing data
+                       A, AAPL, ABBV, ABT, ACGL, ACN, ADBE, ADI, ADM, ADP
+\end{verbatim}
+\textit{Note}: For now, we exclude stocks without data for the entire period, and acknowledge that this inherent survivorship bias in the dataset would make it unsuitable for real-world scenarios. However, this can be modified if needed. Since we virtually only have NaNs for stocks that were born late, i.e., that didn't exist before a certain date, this tells us that the data is actually complete without unexplainable NaNs. We can therefore include those stocks later on. Note that all other fields were taken from the same dataset. There are no more NaNs to record. The NaNs occur on the same dates for the same stocks for the other fields (volume, spreads, etc.).
+
+\clearpage
+
+\subsection{Exploratory Analysis: Prices (without NaNs)}
+\begin{verbatim}
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                   2,385 dates x 428 stocks
+Total data points:       1,020,780
+Non-NaN values:          1,020,780 (100.00%)
+NaN values:              0 (0.00%)
+Date range:              2015-07-13 to 2024-12-31
+Time span:               3460 days
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:             126.6941
+Global median:           76.3462
+Global std:              257.3492
+Global skewness:         16.5320
+Global kurtosis:         402.9668 (excess)
+Global min:              0.1489
+Global max:              9924.4004
+Global 1st percentile:   8.3280
+Global 99th percentile:  719.6042
+\end{verbatim}
+
+\subsubsection*{Statistical Summary (Top 10 stocks by mean)}
+\begin{table}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & mean & std & min & 25\% & 50\% & 75\% & max & cv \\
+\midrule
+NVR & 4032.42 & 1979.40 & 1394.10 & 2536.79 & 3720.88 & 5053.02 & 9924.40 & 0.49 \\
+AZO & 1463.64 & 822.23 & 493.15 & 763.26 & 1140.23 & 2174.89 & 3370.27 & 0.56 \\
+MTD & 906.58 & 403.71 & 277.62 & 579.65 & 793.73 & 1288.25 & 1702.53 & 0.45 \\
+REGN & 556.56 & 206.31 & 273.46 & 383.47 & 510.27 & 691.82 & 1201.76 & 0.37 \\
+EQIX & 542.51 & 195.82 & 202.37 & 361.37 & 553.69 & 711.58 & 985.00 & 0.36 \\
+ORLY & 527.97 & 291.35 & 172.85 & 273.66 & 426.33 & 711.21 & 1270.60 & 0.55 \\
+BLK & 527.56 & 203.72 & 230.55 & 353.09 & 470.35 & 684.16 & 1065.26 & 0.39 \\
+TDG & 484.16 & 314.33 & 125.62 & 216.76 & 438.37 & 577.22 & 1411.63 & 0.65 \\
+FICO & 478.71 & 459.81 & 80.58 & 153.73 & 371.10 & 511.04 & 2382.40 & 0.96 \\
+GWW & 414.50 & 255.60 & 140.27 & 214.97 & 312.95 & 507.59 & 1220.93 & 0.62 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Price Statistics for Top 10 Stocks by Mean.}
+\end{table}
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{nonnanprices_explore.png}
+    \caption{Exploratory plots of non-NaN prices (2015–2024).}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+\subsubsection*{Financial Performance Analysis Report}
+\begin{table}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Ticker & CAGR & Ann. Vol. & Sharpe & Max Drawdown & Calmar & Best Day & Worst Day & Win Rate \% \\
+\midrule
+A & 0.1459 & 0.2685 & 0.6413 & -0.4274 & 0.3414 & 0.0984 & -0.1101 & 53.94 \\
+AAPL & 0.2929 & 0.2872 & 1.0375 & -0.3787 & 0.7734 & 0.1198 & -0.1286 & 53.69 \\
+ABBV & 0.1508 & 0.2663 & 0.6612 & -0.4508 & 0.3344 & 0.1377 & -0.1625 & 53.82 \\
+ABT & 0.1111 & 0.2386 & 0.5605 & -0.3388 & 0.3278 & 0.1094 & -0.0979 & 52.27 \\
+ACGL & 0.1645 & 0.2718 & 0.6963 & -0.5384 & 0.3055 & 0.1536 & -0.1688 & 54.45 \\
+... & ... & ... & ... & ... & ... & ... & ... & ... \\
+XYL & 0.1457 & 0.2698 & 0.6386 & -0.4669 & 0.3120 & 0.1126 & -0.1203 & 52.35 \\
+YUM & 0.1043 & 0.2378 & 0.5355 & -0.5217 & 0.1999 & 0.2325 & -0.1883 & 53.10 \\
+ZBH & 0.0083 & 0.2744 & 0.1672 & -0.4973 & 0.0167 & 0.1558 & -0.1399 & 50.04 \\
+ZBRA & 0.1413 & 0.3985 & 0.5327 & -0.6778 & 0.2085 & 0.1721 & -0.2385 & 52.52 \\
+ZTS & 0.1485 & 0.2577 & 0.6659 & -0.4652 & 0.3192 & 0.1198 & -0.1470 & 52.31 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Performance Metrics Summary (Analysis based on 252 trading days per year).}
+\end{table}
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{nonnan_financial.png}
+    \caption{FInancial plots of non-NaN prices (2015–2024).}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+\clearpage
+
+\subsection{Exploratory Analysis: Spreads}
+\begin{verbatim}
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                   2,385 dates x 500 stocks
+Total data points:       1,192,500
+Non-NaN values:          1,110,743 (93.14%)
+NaN values:              81,757 (6.86%)
+Date range:              2015-07-13 to 2024-12-31
+Time span:               3460 days
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:             0.0003
+Global median:           0.0002
+Global std:              0.0004
+Global skewness:         10.0622
+Global kurtosis:         342.1081 (excess)
+Global min:              0.0000
+Global max:              0.0426
+Global 1st percentile:   0.0000
+Global 99th percentile:  0.0016
+\end{verbatim}
+\textit{Note: We identify a small number of NEGATIVE spreads: Percentage of negative spreads: 0.0212\%. After looking at individual cases, this error seems to be related to tracking errors coming from the source (CRSP) database. For those values, their average is in the order of $1 \times 10^{-4}$, so we can set them to 0 or preferably to $BID \times 1 BP$.}
+
+\subsubsection*{Statistical Summary (Top 10 stocks by mean relative spread)}
+\begin{table}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & mean & std & min & 25\% & 50\% & 75\% & max & cv \\
+\midrule
+TPL & 0.0030 & 0.0026 & 0.0000 & 0.0008 & 0.0026 & 0.0044 & 0.0195 & 0.89 \\
+ENPH & 0.0020 & 0.0026 & 0.0000 & 0.0003 & 0.0007 & 0.0026 & 0.0177 & 1.29 \\
+ERIE & 0.0018 & 0.0012 & 0.0000 & 0.0010 & 0.0015 & 0.0023 & 0.0109 & 0.69 \\
+LEN & 0.0014 & 0.0011 & 0.0001 & 0.0006 & 0.0013 & 0.0021 & 0.0093 & 0.77 \\
+SMCI & 0.0013 & 0.0010 & 0.0000 & 0.0005 & 0.0010 & 0.0020 & 0.0096 & 0.79 \\
+NWS & 0.0013 & 0.0012 & 0.0003 & 0.0005 & 0.0007 & 0.0012 & 0.0054 & 0.93 \\
+NVR & 0.0011 & 0.0011 & 0.0000 & 0.0000 & 0.0011 & 0.0018 & 0.0086 & 0.96 \\
+AMCR & 0.0009 & 0.0001 & 0.0000 & 0.0009 & 0.0009 & 0.0010 & 0.0026 & 0.14 \\
+WBD & 0.0009 & 0.0002 & 0.0004 & 0.0008 & 0.0009 & 0.0012 & 0.0020 & 0.26 \\
+F & 0.0009 & 0.0003 & 0.0000 & 0.0008 & 0.0008 & 0.0010 & 0.0025 & 0.29 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Relative Spread Statistics for Top 10 Stocks by Mean.}
+\end{table}
+
+
+
+
+\clearpage
+
+\subsection{Exploratory Analysis: Short Fee Data}
+\textit{Note: This data is in percentage annualized. So a value of 0.25 would be 0.25\% annualized. The data for short fee was gathered for 500 stocks from a scraping process taken from Interactive Brokers' 'Stock Loan Availability Database'.}
+\\
+\\
+\textit{Note 2: I am working on more analysis regarding this short fee data, to make sure of its accuracy/reliability. I am looking into papers that try to approximate/estimate short fee data from other factors. That may be something useful to check whether this data is actually representative of the market.} 
+
+\subsubsection*{NaN Report (Initial)}
+\begin{verbatim}
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+total_stocks                  : 428
+total_dates                   : 2,385
+stocks_no_nans                : 0
+stocks_with_nans              : 428
+avg_missing_%                 : 4.42
+median_missing_%              : 2.22
+max_missing_%                 : 97.36
+min_missing_%                 : 2.22
+total_missing_values          : 45,074
+total_data_points             : 1,020,780
+overall_completeness_%        : 95.58
+\end{verbatim}
+\textit{Short fees tend to be the same for around a week. For the purpose of this data, we forward fill up to 5 days.}
+
+\subsubsection*{NaN Report (After Forward Fill)}
+\begin{verbatim}
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+total_stocks                  : 428
+total_dates                   : 2,385
+stocks_no_nans                : 406
+stocks_with_nans              : 22
+avg_missing_%                 : 2.24
+median_missing_%              : 0.00
+max_missing_%                 : 97.32
+min_missing_%                 : 0.00
+total_missing_values          : 22,850
+total_data_points             : 1,020,780
+overall_completeness_%        : 97.76
+\end{verbatim}
+\textit{Finally, we keep the 406 stocks with no missing data, as filling more than 5 days would not be accurate. We now have 406 stocks with no missing data for all the dates.}
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{nan_shortfees.png}
+    \caption{NaN Plots for short fees.}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+
+\subsubsection*{Statistical Summary (Cleaned Data)}
+\begin{verbatim}
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                   2,385 dates x 406 stocks
+Total data points:       968,310
+Non-NaN values:          968,310 (100.00%)
+Date range:              2015-07-13 to 2024-12-31
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:             0.3229
+Global median:           0.2500
+Global std:              0.6991
+Global skewness:         44.7814
+Global kurtosis:         3236.0611 (excess)
+Global min:              0.0000
+Global max:              117.1414
+Global 1st percentile:   0.2500
+Global 99th percentile:  1.0000
+\end{verbatim}
+\textit{Note: The global min for short fees is 0. This is suspicious. After looking into it, in the 2,386 rows of data, I found only a single instance of a zero fee. I also searched for very small, unrealistic, near-zero fees and found none. This makes it an isolated data point.}
+
+\subsubsection*{Statistical Summary (Top 10 stocks by mean short fee)}
+\begin{table}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & mean & std & min & 25\% & 50\% & 75\% & max & cv \\
+\midrule
+ENPH & 5.5438 & 9.1070 & 0.25 & 0.2500 & 0.3701 & 7.4445 & 47.8668 & 1.64 \\
+TSLA & 1.4823 & 3.7155 & 0.25 & 0.2500 & 0.3232 & 1.0447 & 44.9540 & 2.51 \\
+AMD & 0.9325 & 3.1590 & 0.25 & 0.2500 & 0.2624 & 0.4237 & 44.6650 & 3.39 \\
+CCL & 0.7001 & 3.1402 & 0.25 & 0.2500 & 0.2620 & 0.3497 & 59.7629 & 4.49 \\
+LDOS & 0.5944 & 2.3940 & 0.25 & 0.2500 & 0.2586 & 0.4081 & 44.8596 & 4.03 \\
+IFF & 0.5579 & 1.3703 & 0.25 & 0.2500 & 0.2613 & 0.3997 & 25.0308 & 2.46 \\
+SYF & 0.5444 & 1.8186 & 0.25 & 0.2500 & 0.2500 & 0.3501 & 33.1060 & 3.34 \\
+VRSN & 0.4487 & 0.4488 & 0.25 & 0.2500 & 0.3065 & 0.5841 & 11.0385 & 1.00 \\
+WAB & 0.4452 & 0.4114 & 0.25 & 0.2500 & 0.2906 & 0.4117 & 7.3904 & 0.92 \\
+ACN & 0.4340 & 1.1846 & 0.25 & 0.2500 & 0.2500 & 0.2778 & 22.5065 & 2.73 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Short Fee Statistics for Top 10 Stocks by Mean.}
+\end{table}
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{shortfees_explore.png}
+    \caption{Exploratory plots of non-NaN prices (2015–2024).}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+
+\clearpage
+
+% --- COMPARISON SECTION ---
+\section{Comparison with Markowitz Reference Data}
+
+\subsection{Comparison of prices, returns.}
+\subsubsection*{This Report's Prices Data}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{rprices.png}
+    \caption{This report's price data (2015–2024).}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+\subsection{Markowitz Prices Data}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{kprices.png}
+    \caption{Markowitz Prices Data}
+    \label{fig:nonnanprices_explore}
+\end{figure}
+
+\subsection{Comparison of Spreads}
+\subsubsection*{This Report's Spread Data}
+\begin{verbatim}
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:             0.0003
+Global median:           0.0002
+Global std:              0.0004
+Global skewness:         10.3917
+Global kurtosis:         407.4457 (excess)
+Global min:              0.0000
+Global max:              0.0426
+Global 1st percentile:   0.0000
+Global 99th percentile:  0.0016
+\end{verbatim}
+
+\subsubsection*{Markowitz Reference Spread Data}
+\begin{verbatim}
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:             0.0007
+Global median:           0.0003
+Global std:              0.0014
+Global skewness:         23.9138
+Global kurtosis:         1353.1834 (excess)
+Global min:              0.0000
+Global max:              0.1600
+Global 1st percentile:   0.0000
+Global 99th percentile:  0.0049
+\end{verbatim}
+
+\end{document}
