@@ -60,139 +60,120 @@ class OptimizationInput:
         return self.prices.shape[1]
 
 
+# In backtest.py, replace the entire run_backtest function with this
+
 def run_backtest(
     strategy: Callable, 
     risk_target: float, 
     verbose: bool = False, 
-    strategy_kwargs: dict | None = None, # MODIFICATION 1: For passing extra params
-    max_steps: int | None = None, # MODIFICATION 2: For fixed-period tests
-    start_time: str | pd.Timestamp | None = None, # MODIFICATION 5: For Monte-Carlo analysis
-    initial_weights: pd.Series | None = None, # MODIFICATION 6: For initial weights
-    use_actual_shortfees: bool = True, # MODIFICATION 8: For using actual shortfees data
+    strategy_kwargs: dict | None = None,
+    max_steps: int | None = None,
+    start_time: str | pd.Timestamp | None = None,
+    initial_weights: pd.Series | None = None,
+    use_actual_shortfees: bool = True,
     ) -> BacktestResult:
     """
     Run a simplified backtest for a given strategy.
-    At time t we use data from t-lookback to t to compute the optimal portfolio
-    weights and then execute the trades at time t.
+    This is the corrected version that handles start_time properly.
     """
-
-    # STEP 1: Load all data
     if strategy_kwargs is None: 
         strategy_kwargs = {}
 
+    # STEP 1: Load all data (do not slice it yet)
     prices, spread, rf, _ = load_data()
     n_assets = prices.shape[1] 
 
-    # STEP 2: Determine the simulation start index
-    training_length = 1250
-    start_idx_from_time = 0 
-    if start_time is not None: 
+    # STEP 2: Determine the simulation's true start index
+    training_length = 1250 # Min days of data before simulation can start
+    
+    sim_start_day_idx = training_length # Default start
+    if start_time:
         try:
-            start_idx_from_time = prices.index.get_loc(start_time)
+            # Find the index for the user-provided start time
+            user_start_idx = prices.index.get_loc(start_time)
+            # The actual start must be after the warm-up period
+            sim_start_day_idx = max(training_length, user_start_idx)
         except KeyError:
-            logger.warning(f"Start time {start_time} not found in prices index.")
+            logger.error(f"Start time {start_time} not in index. Aborting.")
             raise
 
-    # The actual start index must be after the training/warm-up period
-    start_idx = max(training_length, start_idx_from_time)
-
-    # STEP 3: Initialize the portfolio (either cash or initial weights)
-    cash = 1e6  # Initial cash
-
+    # STEP 3: Initialize portfolio state on the day BEFORE the simulation starts
+    setup_day_idx = sim_start_day_idx - 1
+    setup_day_timestamp = prices.index[setup_day_idx]
+    
+    cash = 1e6
+    quantities = np.zeros(n_assets)
 
     if initial_weights is not None:
-        # We are starting with a pre-defined portfolio
-        logger.info("Initializing backtest with a starting portfolio.")
-        # We need the prices on the day before the simulation starts to value our initial holdings
-        initial_prices = prices.iloc[start_idx -1]
-
+        logger.info(f"Initializing portfolio on {setup_day_timestamp.date()} before simulation starts.")
+        initial_prices = prices.iloc[setup_day_idx]
+        
+        # Use total capital to calculate initial holdings
         initial_values = cash * initial_weights
-        quantities = initial_values / initial_prices
-
-        # The cash is what's left over. If initial_weights sum to 1, cash is 0.
+        quantities = (initial_values / initial_prices).fillna(0)
+        
+        # Update cash to be what's left over
         cash = cash - (quantities @ initial_prices)
-        logger.info(f"Initial cash: {cash:.2f}, Initial quantities: {quantities}")
-    else: 
-        # Standard start: 100% cash
-        quantities = np.zeros(n_assets)
 
-    # STEP 4: Slide dataframes to the simulation window
-    prices, spread, rf = (
-        prices.iloc[training_length:],
-        spread.iloc[training_length:],
-        rf.iloc[training_length:],
-    )
+    # STEP 4: Initialize result lists and add the "Day 0" state
+    post_trade_cash = [cash]
+    post_trade_quantities = [quantities.copy()]
+    timings = [Timing(0, 0, 0)] # Placeholder for Day 0
+    daily_target_weights_history = [np.full(n_assets, np.nan)] # Placeholder for Day 0
 
-    # STEP 5: Run the simulation
+    # STEP 5: Run the simulation loop starting from the correct day
     lookback = 500
     forward_smoothing = 5
+    
+    # Define the correct range of days for the simulation loop
+    simulation_indices = range(sim_start_day_idx, len(prices) - forward_smoothing)
 
-    post_trade_cash = []
-    post_trade_quantities = []
-    timings = []
-
+    # Pre-computation for the relevant days
     returns = prices.pct_change().dropna()
-    means = (
-        synthetic_returns(prices, information_ratio=0.15, forward_smoothing=forward_smoothing)
-        .shift(-1)
-        .dropna()
-    )  # At time t includes data up to t+1
-    covariance_df = returns.ewm(halflife=125).cov()  # At time t includes data up to t
-    indices = range(lookback, len(prices) - forward_smoothing)
+    means = synthetic_returns(prices, information_ratio=0.15, forward_smoothing=forward_smoothing).shift(-1).dropna()
+    covariance_df = returns.ewm(halflife=125).cov()
+    
+    days_to_compute = [prices.index[t] for t in simulation_indices[:(max_steps or len(simulation_indices))]]
+    covariances = {day: covariance_df.loc[day] for day in days_to_compute if day in covariance_df.index}
+    cholesky_factorizations = {day: np.linalg.cholesky(cov.values) for day, cov in covariances.items()}
 
-    # Pre-computation
-    days = [prices.index[t] for t in indices]
-    covariances = {}
-    cholesky_factorizations = {}
-    for day in days:
-        covariances[day] = covariance_df.loc[day]
-        cholesky_factorizations[day] = np.linalg.cholesky(covariances[day].values)
-
-    daily_target_weights_history = []
-
-    for i, t in enumerate(indices):
-        # MODIFICATION 3: Check if we should stop early
+    for i, t in enumerate(simulation_indices):
         if max_steps is not None and i >= max_steps:
             break
 
         start_time_loop = time.perf_counter()
         day = prices.index[t]
 
-        if day not in covariances: 
-            logger.warning(f"Covariance for day {day} not found. Skipping.")
+        if day not in covariances:
+            logger.warning(f"Covariance for day {day} not found. Using last known portfolio state.")
+            post_trade_cash.append(cash)
+            post_trade_quantities.append(quantities.copy())
+            timings.append(Timing(0, 0, 0))
+            daily_target_weights_history.append(np.full(n_assets, np.nan))
             continue
-
+            
         if verbose:
-            logger.info(f"Day {t} of {len(prices)-forward_smoothing}, {day}")
+            logger.info(f"Day {i+1}/{max_steps or len(simulation_indices)}, {day.date()}")
 
-        prices_t = prices.iloc[t - lookback : t + 1]  # Up to t
+        prices_t = prices.iloc[t - lookback : t + 1]
         spread_t = spread.iloc[t - lookback : t + 1]
-
-        mean_t = means.loc[day]  # Forecast for return t to t+1
-        covariance_t = covariances[day]  # Forecast for covariance t to t+1
-        chol_t = cholesky_factorizations[day]
-        volas_t = np.sqrt(np.diag(covariance_t.values))
-
+        
         inputs_t = OptimizationInput(
-            prices_t,
-            mean_t,
-            chol_t,
-            volas_t,
-            spread_t,
-            quantities,
-            cash,
-            risk_target,
-            rf.iloc[t],
+            prices=prices_t,
+            mean=means.loc[day],
+            chol=cholesky_factorizations[day],
+            volas=np.sqrt(np.diag(covariances[day].values)),
+            spread=spread_t,
+            quantities=quantities,
+            cash=cash,
+            risk_target=risk_target,
+            risk_free=rf.iloc[t],
         )
 
-        # MODIFICATION 4: Pass the extra arguments to the strategy
         w, _, problem = strategy(inputs_t, **strategy_kwargs)
-
-        # MODIFICATION 7?
-        # Record the target weight vector for this day 
         daily_target_weights_history.append(w)
 
-        latest_prices = prices.iloc[t]  # At t
+        latest_prices = prices.iloc[t]
         latest_spread = spread.iloc[t]
 
         cash += interest_and_fees(cash, rf.iloc[t - 1], quantities, prices.iloc[t - 1], day, use_actual_shortfees)
@@ -202,49 +183,31 @@ def run_backtest(
 
         post_trade_cash.append(cash)
         post_trade_quantities.append(quantities.copy())
+        timings.append(Timing.get_timing(start_time_loop, time.perf_counter(), problem))
 
-        # Timings
-        end_time_loop = time.perf_counter()
-        timings.append(Timing.get_timing(start_time_loop, end_time_loop, problem))
+    # STEP 6: Construct the final BacktestResult object
+    num_results = len(post_trade_cash)
+    result_index = prices.index[setup_day_idx : setup_day_idx + num_results]
 
-
-    # Instead of slicing the original index, we calculate the correct end point. 
-
-
-    # The number of steps we actually ran 
-    num_steps_ran = len(post_trade_cash)
-
-    # The end of our slice is 'lookback' + the number of steps we ran
-    end_index_slice = lookback + num_steps_ran
-
-    # The index for our results corresponds to the days we actually simulated
-    result_index = prices.index[lookback:end_index_slice]
-
-    post_trade_cash = pd.Series(post_trade_cash, index=result_index)
-    post_trade_quantities = pd.DataFrame(
-        post_trade_quantities,
-        index=result_index,
-        columns=prices.columns,
+    post_trade_cash_series = pd.Series(post_trade_cash, index=result_index)
+    post_trade_quantities_df = pd.DataFrame(
+        post_trade_quantities, index=result_index, columns=prices.columns
     )
-
-    # Convert the list of weights into a DataFrame
     daily_target_weights_df = pd.DataFrame(
         daily_target_weights_history, index=result_index, columns=prices.columns
     )
 
-    # Extract original target weights if they were passed
     original_target_weights = pd.Series(dtype=float)
     if 'target_weights' in strategy_kwargs:
         original_target_weights = pd.Series(strategy_kwargs['target_weights'], index=prices.columns)
     
-    # Store initial weights if they were provided
     stored_initial_weights = pd.Series(dtype=float)
     if initial_weights is not None:
         stored_initial_weights = pd.Series(initial_weights, index=prices.columns)
     
     return BacktestResult(
-        post_trade_cash, 
-        post_trade_quantities, 
+        post_trade_cash_series, 
+        post_trade_quantities_df, 
         risk_target, 
         timings, 
         daily_target_weights=daily_target_weights_df,
