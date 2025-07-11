@@ -29,6 +29,16 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]
     return prices, spread, rf, volume
 
 
+@lru_cache(maxsize=1)
+def load_shortfees() -> pd.DataFrame:
+    """Load shortfees data with annualized rates converted to daily."""
+    shortfees = pd.read_csv(data_path() / "shortfees_full.csv", index_col=0, parse_dates=True)
+    if os.getenv("CI"):
+        shortfees = shortfees.tail(1800)
+    # Convert annualized percentage to daily rate: /100/360
+    return shortfees / 100 / 360
+
+
 @dataclass
 class OptimizationInput:
     """
@@ -58,6 +68,7 @@ def run_backtest(
     max_steps: int | None = None, # MODIFICATION 2: For fixed-period tests
     start_time: str | pd.Timestamp | None = None, # MODIFICATION 5: For Monte-Carlo analysis
     initial_weights: pd.Series | None = None, # MODIFICATION 6: For initial weights
+    use_actual_shortfees: bool = True, # MODIFICATION 8: For using actual shortfees data
     ) -> BacktestResult:
     """
     Run a simplified backtest for a given strategy.
@@ -137,6 +148,8 @@ def run_backtest(
         covariances[day] = covariance_df.loc[day]
         cholesky_factorizations[day] = np.linalg.cholesky(covariances[day].values)
 
+    daily_target_weights_history = []
+
     for i, t in enumerate(indices):
         # MODIFICATION 3: Check if we should stop early
         if max_steps is not None and i >= max_steps:
@@ -175,10 +188,14 @@ def run_backtest(
         # MODIFICATION 4: Pass the extra arguments to the strategy
         w, _, problem = strategy(inputs_t, **strategy_kwargs)
 
+        # MODIFICATION 7?
+        # Record the target weight vector for this day 
+        daily_target_weights_history.append(w)
+
         latest_prices = prices.iloc[t]  # At t
         latest_spread = spread.iloc[t]
 
-        cash += interest_and_fees(cash, rf.iloc[t - 1], quantities, prices.iloc[t - 1], day)
+        cash += interest_and_fees(cash, rf.iloc[t - 1], quantities, prices.iloc[t - 1], day, use_actual_shortfees)
         trade_quantities = create_orders(w, quantities, cash, latest_prices)
         quantities += trade_quantities
         cash += execute_orders(latest_prices, trade_quantities, latest_spread)
@@ -210,7 +227,31 @@ def run_backtest(
         columns=prices.columns,
     )
 
-    return BacktestResult(post_trade_cash, post_trade_quantities, risk_target, timings)
+    # Convert the list of weights into a DataFrame
+    daily_target_weights_df = pd.DataFrame(
+        daily_target_weights_history, index=result_index, columns=prices.columns
+    )
+
+    # Extract original target weights if they were passed
+    original_target_weights = pd.Series(dtype=float)
+    if 'target_weights' in strategy_kwargs:
+        original_target_weights = pd.Series(strategy_kwargs['target_weights'], index=prices.columns)
+    
+    # Store initial weights if they were provided
+    stored_initial_weights = pd.Series(dtype=float)
+    if initial_weights is not None:
+        stored_initial_weights = pd.Series(initial_weights, index=prices.columns)
+    
+    return BacktestResult(
+        post_trade_cash, 
+        post_trade_quantities, 
+        risk_target, 
+        timings, 
+        daily_target_weights=daily_target_weights_df,
+        original_target_weights=original_target_weights,
+        initial_weights=stored_initial_weights,
+        use_actual_shortfees=use_actual_shortfees
+    )
 
 
 def create_orders(
@@ -243,24 +284,44 @@ def execute_orders(
 
 
 def interest_and_fees(
-    cash: float, rf: float, quantities: pd.Series, prices: pd.Series, day: pd.Timestamp
+    cash: float, rf: float, quantities: pd.Series, prices: pd.Series, day: pd.Timestamp,
+    use_actual_shortfees: bool = True
 ) -> float:
     """
     From t-1 to t we either earn interest on cash or pay interest on borrowed cash.
-    We also pay a fee for shorting (stark simplification: using the same rate).
+    We also pay a fee for shorting.
 
     cash: cash at t-1
     rf: risk free rate from t-1 to t
     quantities: quantities at t-1
     prices: prices at t-1
     day: day t
+    use_actual_shortfees: if True, use actual shortfees data; if False, use hardcoded 5bps
     Note on rf: the Effective Federal Funds Rate uses ACT/360.
     """
     days_t_to_t_minus_1 = (day - prices.name).days
     cash_interest = cash * (1 + rf) ** days_t_to_t_minus_1 - cash
+    
     short_valuations = np.clip(quantities, None, 0) * prices
     short_value = short_valuations.sum()
-    short_spread = 0.05 / 360
+    
+    if use_actual_shortfees:
+        # Use actual shortfees data (already converted to daily rates)
+        shortfees = load_shortfees()
+        if day in shortfees.index:
+            # Weighted average short fee based on short positions
+            short_weights = np.clip(quantities, None, 0) * prices
+            short_weights = short_weights / short_weights.sum() if short_weights.sum() != 0 else short_weights
+            daily_shortfees = shortfees.loc[day]
+            short_spread = (short_weights * daily_shortfees).sum()
+        else:
+            # Fallback to hardcoded if date not available
+            logger.warning(f"Shortfees data not available for date {day}, falling back to hardcoded 5bps annualized rate")
+            short_spread = 0.05 / 360
+    else:
+        # Use hardcoded 5bps annualized
+        short_spread = 0.05 / 360
+    
     shorting_fee = short_value * (1 + rf + short_spread) ** days_t_to_t_minus_1 - short_value
     return cash_interest + shorting_fee
 
@@ -293,6 +354,13 @@ class BacktestResult:
     risk_target: float
     timings: list[Timing]
     dual_optimals: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    # ADDED NEW FIELDS 
+    daily_target_weights: pd.DataFrame = field(default_factory=pd.DataFrame)
+    original_target_weights: pd.Series = field(default_factory=pd.Series)
+    initial_weights: pd.Series = field(default_factory=pd.Series)
+    use_actual_shortfees: bool = True
+
 
     @property
     def valuations(self) -> pd.DataFrame:
