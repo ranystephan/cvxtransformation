@@ -1,0 +1,1672 @@
+The data was taken from the CRSP database through the following fields: 
+
+PERMNO,date,SHRCD,TICKER,DISTCD,DIVAMT,PRC,VOL,RET,BID,ASK,CFACPR,CFACSHR
+
+
+DATA PROCESSING:
+
+The raw CRSP dataset underwent several processing stages.
+
+Several columns were added to the dataset based on the following formulas:
+
+*   `DIV_CASH`: This column was created to isolate cash dividends. Its value is equal to `DIVAMT` if the distribution code (`DISTCD`) starts with '12' (indicating an ordinary or special cash dividend), and 0 otherwise.
+*   Split-Adjusted Columns: The price, volume, and bid/ask values were adjusted for stock splits using the cumulative factors provided by CRSP.
+    *   `PRC_SPLIT_ADJ` = `PRC` / `CFACPR`
+    *   `VOL_ADJ` = `VOL` / `CFACSHR`
+    *   `BID_ADJ` = `BID` / `CFACPR`
+    *   `ASK_ADJ` = `ASK` / `CFACPR`
+*   `ADJ_CLOSE`: A total-return adjusted closing price was calculated. This was done by first creating a daily return factor: `(PRC_SPLIT_ADJ + DIV_CASH) / PRC_SPLIT_ADJ.shift(1)`. A cumulative product of these factors generated a total return index, which was then rescaled so its final value matched the final `PRC_SPLIT_ADJ`.
+*   Spread Columns: Two metrics for the bid-ask spread were calculated.
+    *   `SPREAD` = `ASK_ADJ` - `BID_ADJ`
+    *   `REL_SPREAD` = `SPREAD` / ((`ASK_ADJ` + `BID_ADJ`) / 2)
+
+Finally, the dataset was filtered to retain only the tickers belonging to the S&P 500 index, and the resulting data was pivoted and saved into separate files for prices, returns, spreads, and volumes.
+
+
+DATA EXPLORATION: (before filtering)
+
+
+NAN REPORT:
+
+prices.csv:
+
+Missing Data Panel:
+
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+total_stocks                  : 500  # Total number of stocks in the dataset
+total_dates                   : 2,385  # Total number of trading dates in the dataset
+total_span_days               : 3,460  # Total calendar days from earliest to latest date
+stocks_no_nans                : 428  # Stocks with no missing data (100% complete)
+stocks_with_nans              : 72  # Stocks with at least one missing value
+stocks_internal_gaps_only     : 2  # Stocks that span full period but have gaps in middle
+stocks_born_late              : 70  # Stocks that start after the earliest date in dataset
+stocks_dead_early             : 0  # Stocks that end before the latest date in dataset
+stocks_middle_only            : 0  # Stocks that both start late and end early
+stocks_full_period            : 430  # Stocks that span the entire dataset time period
+stocks_complete_coverage      : 498  # Stocks with no gaps in their own time series (100% completeness)
+avg_missing_%                 : 6.86  # Average percentage of missing data across all stocks
+median_missing_%              : 0.00  # Median percentage of missing data across all stocks
+max_missing_%                 : 94.80  # Highest percentage of missing data for any single stock
+min_missing_%                 : 0.00  # Lowest percentage of missing data for any single stock
+std_missing_%                 : 19.56  # Standard deviation of missing percentages across stocks
+total_missing_values          : 81,758  # Total count of all missing data points
+total_data_points             : 1,192,500  # Total possible data points (dates × stocks)
+overall_completeness_%        : 93.14  # Percentage of all possible data points that are present
+
+STOCK LISTS
+--------------------------------------------------------------------------------
+born_late                : 70 stocks  # Stocks that started trading after the dataset begins
+                             ABNB, AMCR, APTV, AXON, BALL ... and 65 more
+dead_early               : 0 stocks  # Stocks that stopped trading before the dataset ends
+middle_only              : 0 stocks  # Stocks that both started late and ended early
+internal_gaps_only       : 2 stocks  # Stocks with full period coverage but internal data gaps
+                             DXCM, SMCI
+full_period              : 430 stocks  # Stocks that span the entire dataset time period
+                             A, AAPL, ABBV, ABT, ACGL ... and 425 more
+complete_coverage        : 498 stocks  # Stocks with no missing data within their own time series
+                             A, AAPL, ABBV, ABT, ACGL ... and 493 more
+no_nans                  : 428 stocks  # Stocks with zero missing data points overall
+                             A, AAPL, ABBV, ABT, ACGL ... and 423 more
+worst_10                 : 10 stocks  # Stocks with highest percentage of missing data
+                             SW, GEV, SOLV, CPAY, DOC, DAY, VLTO, COR, EG, FI
+best_10                  : 10 stocks  # Stocks with lowest percentage of missing data
+                             A, AAPL, ABBV, ABT, ACGL, ACN, ADBE, ADI, ADM, ADP
+
+
+
+For now, we exclude stocks without data for the entire period, and acknowledge that this inherent survivorship bias in the dataset would make it unsuitable for a real world scenarios. 
+However, this can be modified if needed. Since virtually only have NANS for stocks that were born late, i.e. that didn't exist before a certain date, this tells us that the data is actually complete without unexplainable nans. We can therefore include those stocks later on. 
+
+
+
+
+Note that all other fields were taken from the same dataset. There are no more Nans to record. The nans occur on the same dates for the same stocks for the other fields (volume, spreads...).
+
+
+EXPLORATORY ANALYSIS:
+
+prices (without nans):
+
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                    2,385 dates × 428 stocks
+Total data points:        1,020,780
+Non-NaN values:           1,020,780 (100.00%)
+NaN values:               0 (0.00%)
+Date range:               2015-07-13 to 2024-12-31
+Time span:                3460 days
+
+STATISTICAL SUMMARY (Top 10 stocks by mean)
+----------------------------------------
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>count</th>
+      <th>mean</th>
+      <th>std</th>
+      <th>min</th>
+      <th>1%</th>
+      <th>5%</th>
+      <th>10%</th>
+      <th>25%</th>
+      <th>50%</th>
+      <th>75%</th>
+      <th>90%</th>
+      <th>95%</th>
+      <th>99%</th>
+      <th>max</th>
+      <th>skewness</th>
+      <th>kurtosis</th>
+      <th>cv</th>
+      <th>iqr</th>
+      <th>range</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>NVR</th>
+      <td>2385.0</td>
+      <td>4032.415669</td>
+      <td>1979.399590</td>
+      <td>1394.099980</td>
+      <td>1496.045956</td>
+      <td>1590.141992</td>
+      <td>1665.316018</td>
+      <td>2536.790040</td>
+      <td>3720.879880</td>
+      <td>5053.020020</td>
+      <td>7114.933984</td>
+      <td>8069.704104</td>
+      <td>9457.293203</td>
+      <td>9924.40039</td>
+      <td>0.865418</td>
+      <td>0.251776</td>
+      <td>0.490872</td>
+      <td>2516.229980</td>
+      <td>8530.300410</td>
+    </tr>
+    <tr>
+      <th>AZO</th>
+      <td>2385.0</td>
+      <td>1463.642625</td>
+      <td>822.231091</td>
+      <td>493.149990</td>
+      <td>524.236425</td>
+      <td>607.398024</td>
+      <td>686.597998</td>
+      <td>763.260010</td>
+      <td>1140.229980</td>
+      <td>2174.889890</td>
+      <td>2725.641892</td>
+      <td>3065.713914</td>
+      <td>3196.559660</td>
+      <td>3370.27002</td>
+      <td>0.728122</td>
+      <td>-0.903764</td>
+      <td>0.561770</td>
+      <td>1411.629880</td>
+      <td>2877.120030</td>
+    </tr>
+    <tr>
+      <th>MTD</th>
+      <td>2385.0</td>
+      <td>906.582855</td>
+      <td>403.705453</td>
+      <td>277.620000</td>
+      <td>293.001998</td>
+      <td>332.458006</td>
+      <td>374.883998</td>
+      <td>579.650020</td>
+      <td>793.729980</td>
+      <td>1288.250000</td>
+      <td>1453.167992</td>
+      <td>1520.345970</td>
+      <td>1581.781971</td>
+      <td>1702.53003</td>
+      <td>0.116324</td>
+      <td>-1.421596</td>
+      <td>0.445305</td>
+      <td>708.599980</td>
+      <td>1424.910030</td>
+    </tr>
+    <tr>
+      <th>REGN</th>
+      <td>2385.0</td>
+      <td>556.555725</td>
+      <td>206.306665</td>
+      <td>273.459990</td>
+      <td>286.818007</td>
+      <td>308.052010</td>
+      <td>339.243994</td>
+      <td>383.470000</td>
+      <td>510.269990</td>
+      <td>691.820010</td>
+      <td>835.434008</td>
+      <td>969.789976</td>
+      <td>1141.981161</td>
+      <td>1201.76001</td>
+      <td>0.879683</td>
+      <td>0.099888</td>
+      <td>0.370685</td>
+      <td>308.350010</td>
+      <td>928.300020</td>
+    </tr>
+    <tr>
+      <th>EQIX</th>
+      <td>2385.0</td>
+      <td>542.507832</td>
+      <td>195.819048</td>
+      <td>202.371632</td>
+      <td>221.432353</td>
+      <td>250.381871</td>
+      <td>295.866725</td>
+      <td>361.366118</td>
+      <td>553.694852</td>
+      <td>711.583819</td>
+      <td>781.838959</td>
+      <td>822.131737</td>
+      <td>926.514395</td>
+      <td>985.00000</td>
+      <td>0.032644</td>
+      <td>-1.295855</td>
+      <td>0.360952</td>
+      <td>350.217700</td>
+      <td>782.628368</td>
+    </tr>
+    <tr>
+      <th>ORLY</th>
+      <td>2385.0</td>
+      <td>527.974059</td>
+      <td>291.353239</td>
+      <td>172.850010</td>
+      <td>197.707200</td>
+      <td>226.950000</td>
+      <td>246.618006</td>
+      <td>273.660000</td>
+      <td>426.329990</td>
+      <td>711.210020</td>
+      <td>983.333970</td>
+      <td>1112.364010</td>
+      <td>1219.516395</td>
+      <td>1270.59998</td>
+      <td>0.827189</td>
+      <td>-0.563641</td>
+      <td>0.551832</td>
+      <td>437.550020</td>
+      <td>1097.749970</td>
+    </tr>
+    <tr>
+      <th>BLK</th>
+      <td>2385.0</td>
+      <td>527.555313</td>
+      <td>203.720017</td>
+      <td>230.545337</td>
+      <td>238.136375</td>
+      <td>265.743025</td>
+      <td>286.546723</td>
+      <td>353.089398</td>
+      <td>470.349961</td>
+      <td>684.159766</td>
+      <td>806.069626</td>
+      <td>855.891360</td>
+      <td>1027.631632</td>
+      <td>1065.26001</td>
+      <td>0.453738</td>
+      <td>-0.853053</td>
+      <td>0.386159</td>
+      <td>331.070368</td>
+      <td>834.714673</td>
+    </tr>
+    <tr>
+      <th>TDG</th>
+      <td>2385.0</td>
+      <td>484.163963</td>
+      <td>314.333832</td>
+      <td>125.624859</td>
+      <td>145.106949</td>
+      <td>151.829753</td>
+      <td>166.937730</td>
+      <td>216.759039</td>
+      <td>438.371914</td>
+      <td>577.217375</td>
+      <td>1003.290200</td>
+      <td>1233.854638</td>
+      <td>1346.910666</td>
+      <td>1411.63000</td>
+      <td>1.176454</td>
+      <td>0.736089</td>
+      <td>0.649230</td>
+      <td>360.458336</td>
+      <td>1286.005141</td>
+    </tr>
+    <tr>
+      <th>FICO</th>
+      <td>2385.0</td>
+      <td>478.714497</td>
+      <td>459.813385</td>
+      <td>80.583930</td>
+      <td>83.924394</td>
+      <td>93.263510</td>
+      <td>112.500210</td>
+      <td>153.730000</td>
+      <td>371.100010</td>
+      <td>511.040010</td>
+      <td>1166.252002</td>
+      <td>1567.952052</td>
+      <td>2173.235566</td>
+      <td>2382.39990</td>
+      <td>2.006848</td>
+      <td>3.951144</td>
+      <td>0.960517</td>
+      <td>357.310010</td>
+      <td>2301.815970</td>
+    </tr>
+    <tr>
+      <th>GWW</th>
+      <td>2385.0</td>
+      <td>414.500665</td>
+      <td>255.604116</td>
+      <td>140.273973</td>
+      <td>148.018509</td>
+      <td>164.395435</td>
+      <td>181.818605</td>
+      <td>214.973259</td>
+      <td>312.953627</td>
+      <td>507.591863</td>
+      <td>864.945698</td>
+      <td>966.576882</td>
+      <td>1155.821602</td>
+      <td>1220.93005</td>
+      <td>1.236727</td>
+      <td>0.611861</td>
+      <td>0.616656</td>
+      <td>292.618604</td>
+      <td>1080.656077</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:              126.6941
+Global median:            76.3462
+Global std:               257.3492
+Global skewness:          16.5320
+Global kurtosis:          402.9668 (excess)
+Global min:               0.1489
+Global max:               9924.4004
+Global 1st percentile:    8.3280
+Global 99th percentile:   719.6042
+
+TIME SERIES ANALYSIS
+----------------------------------------
+Average daily mean:       126.6941
+Average daily std:        228.0035
+Average daily count:      428.0 stocks
+Min daily count:          428 stocks
+Max daily count:          428 stocks
+
+STOCK-LEVEL ANALYSIS
+----------------------------------------
+Average stock mean:       126.6941
+Average stock std:        55.0591
+Average stock count:      2385.0 observations
+Min stock count:          2385 observations
+Max stock count:          2385 observations
+
+ EXTREME VALUES ANALYSIS
+----------------------------------------
+Top 5 stocks by mean value:
+  1. NVR: 4032.4157
+  2. AZO: 1463.6426
+  3. MTD: 906.5829
+  4. REGN: 556.5557
+  5. EQIX: 542.5078
+
+Top 5 stocks by volatility (std):
+  1. NVR: 1979.3996
+  2. AZO: 822.2311
+  3. FICO: 459.8134
+  4. MTD: 403.7055
+  5. TDG: 314.3338
+
+Top 5 stocks by data completeness:
+  1. A: 2385 observations
+  2. AAPL: 2385 observations
+  3. ABBV: 2385 observations
+  4. ABT: 2385 observations
+  5. ACGL: 2385 observations
+
+
+
+[ADD PLOTS]
+
+======================================================================
+FINANCIAL PERFORMANCE ANALYSIS REPORT
+======================================================================
+
+(Analysis based on an average of 252 trading days per year)
+
+PERFORMANCE METRICS SUMMARY
+----------------------------------------
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>CAGR</th>
+      <th>Annualized Volatility</th>
+      <th>Sharpe Ratio</th>
+      <th>Max Drawdown</th>
+      <th>Calmar Ratio</th>
+      <th>Best Day</th>
+      <th>Worst Day</th>
+      <th>Win Rate %</th>
+    </tr>
+    <tr>
+      <th>Ticker</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>A</th>
+      <td>0.145926</td>
+      <td>0.268542</td>
+      <td>0.641344</td>
+      <td>-0.427376</td>
+      <td>0.341446</td>
+      <td>0.098394</td>
+      <td>-0.110117</td>
+      <td>53.942953</td>
+    </tr>
+    <tr>
+      <th>AAPL</th>
+      <td>0.292906</td>
+      <td>0.287180</td>
+      <td>1.037472</td>
+      <td>-0.378716</td>
+      <td>0.773419</td>
+      <td>0.119808</td>
+      <td>-0.128647</td>
+      <td>53.691275</td>
+    </tr>
+    <tr>
+      <th>ABBV</th>
+      <td>0.150758</td>
+      <td>0.266298</td>
+      <td>0.661182</td>
+      <td>-0.450843</td>
+      <td>0.334392</td>
+      <td>0.137673</td>
+      <td>-0.162524</td>
+      <td>53.817114</td>
+    </tr>
+    <tr>
+      <th>ABT</th>
+      <td>0.111070</td>
+      <td>0.238649</td>
+      <td>0.560458</td>
+      <td>-0.338801</td>
+      <td>0.327831</td>
+      <td>0.109360</td>
+      <td>-0.097857</td>
+      <td>52.265101</td>
+    </tr>
+    <tr>
+      <th>ACGL</th>
+      <td>0.164463</td>
+      <td>0.271778</td>
+      <td>0.696320</td>
+      <td>-0.538398</td>
+      <td>0.305468</td>
+      <td>0.153577</td>
+      <td>-0.168752</td>
+      <td>54.446309</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>XYL</th>
+      <td>0.145658</td>
+      <td>0.269834</td>
+      <td>0.638638</td>
+      <td>-0.466905</td>
+      <td>0.311965</td>
+      <td>0.112620</td>
+      <td>-0.120273</td>
+      <td>52.348993</td>
+    </tr>
+    <tr>
+      <th>YUM</th>
+      <td>0.104285</td>
+      <td>0.237792</td>
+      <td>0.535469</td>
+      <td>-0.521719</td>
+      <td>0.199888</td>
+      <td>0.232484</td>
+      <td>-0.188324</td>
+      <td>53.104027</td>
+    </tr>
+    <tr>
+      <th>ZBH</th>
+      <td>0.008297</td>
+      <td>0.274378</td>
+      <td>0.167203</td>
+      <td>-0.497319</td>
+      <td>0.016684</td>
+      <td>0.155798</td>
+      <td>-0.139943</td>
+      <td>50.041946</td>
+    </tr>
+    <tr>
+      <th>ZBRA</th>
+      <td>0.141300</td>
+      <td>0.398494</td>
+      <td>0.532746</td>
+      <td>-0.677829</td>
+      <td>0.208460</td>
+      <td>0.172142</td>
+      <td>-0.238459</td>
+      <td>52.516779</td>
+    </tr>
+    <tr>
+      <th>ZTS</th>
+      <td>0.148521</td>
+      <td>0.257688</td>
+      <td>0.665905</td>
+      <td>-0.465220</td>
+      <td>0.319248</td>
+      <td>0.119793</td>
+      <td>-0.146956</td>
+      <td>52.307047</td>
+    </tr>
+  </tbody>
+</table>
+<p>428 rows × 8 columns</p>
+</div>
+
+
+
+
+[ADD PLOTS]
+
+
+spreads:
+
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                    2,385 dates × 500 stocks
+Total data points:        1,192,500
+Non-NaN values:           1,110,743 (93.14%)
+NaN values:               81,757 (6.86%)
+Date range:               2015-07-13 to 2024-12-31
+Time span:                3460 days
+
+STATISTICAL SUMMARY (Top 10 stocks by mean)
+----------------------------------------
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>count</th>
+      <th>mean</th>
+      <th>std</th>
+      <th>min</th>
+      <th>1%</th>
+      <th>5%</th>
+      <th>10%</th>
+      <th>25%</th>
+      <th>50%</th>
+      <th>75%</th>
+      <th>90%</th>
+      <th>95%</th>
+      <th>99%</th>
+      <th>max</th>
+      <th>skewness</th>
+      <th>kurtosis</th>
+      <th>cv</th>
+      <th>iqr</th>
+      <th>range</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>TPL</th>
+      <td>1000.0</td>
+      <td>0.002959</td>
+      <td>0.002639</td>
+      <td>0.000000</td>
+      <td>0.000004</td>
+      <td>0.000006</td>
+      <td>0.000007</td>
+      <td>0.000827</td>
+      <td>0.002622</td>
+      <td>0.004400</td>
+      <td>0.006183</td>
+      <td>0.007549</td>
+      <td>0.011712</td>
+      <td>0.019529</td>
+      <td>1.406919</td>
+      <td>3.910738</td>
+      <td>0.891864</td>
+      <td>0.003573</td>
+      <td>0.019529</td>
+    </tr>
+    <tr>
+      <th>ENPH</th>
+      <td>2385.0</td>
+      <td>0.002044</td>
+      <td>0.002632</td>
+      <td>0.000032</td>
+      <td>0.000055</td>
+      <td>0.000093</td>
+      <td>0.000165</td>
+      <td>0.000345</td>
+      <td>0.000728</td>
+      <td>0.002550</td>
+      <td>0.005965</td>
+      <td>0.008019</td>
+      <td>0.009999</td>
+      <td>0.017699</td>
+      <td>1.889714</td>
+      <td>3.679117</td>
+      <td>1.287499</td>
+      <td>0.002205</td>
+      <td>0.017667</td>
+    </tr>
+    <tr>
+      <th>ERIE</th>
+      <td>2385.0</td>
+      <td>0.001813</td>
+      <td>0.001247</td>
+      <td>0.000039</td>
+      <td>0.000054</td>
+      <td>0.000409</td>
+      <td>0.000623</td>
+      <td>0.000976</td>
+      <td>0.001541</td>
+      <td>0.002346</td>
+      <td>0.003373</td>
+      <td>0.004117</td>
+      <td>0.006011</td>
+      <td>0.010851</td>
+      <td>1.907674</td>
+      <td>6.420565</td>
+      <td>0.687525</td>
+      <td>0.001370</td>
+      <td>0.010812</td>
+    </tr>
+    <tr>
+      <th>LEN</th>
+      <td>2385.0</td>
+      <td>0.001450</td>
+      <td>0.001114</td>
+      <td>0.000058</td>
+      <td>0.000077</td>
+      <td>0.000124</td>
+      <td>0.000165</td>
+      <td>0.000559</td>
+      <td>0.001285</td>
+      <td>0.002056</td>
+      <td>0.002879</td>
+      <td>0.003630</td>
+      <td>0.004771</td>
+      <td>0.009265</td>
+      <td>1.170994</td>
+      <td>2.247405</td>
+      <td>0.768721</td>
+      <td>0.001497</td>
+      <td>0.009207</td>
+    </tr>
+    <tr>
+      <th>SMCI</th>
+      <td>2036.0</td>
+      <td>0.001291</td>
+      <td>0.001026</td>
+      <td>0.000010</td>
+      <td>0.000093</td>
+      <td>0.000273</td>
+      <td>0.000341</td>
+      <td>0.000467</td>
+      <td>0.001002</td>
+      <td>0.001959</td>
+      <td>0.002387</td>
+      <td>0.002780</td>
+      <td>0.004919</td>
+      <td>0.009592</td>
+      <td>2.176456</td>
+      <td>9.949104</td>
+      <td>0.794723</td>
+      <td>0.001492</td>
+      <td>0.009582</td>
+    </tr>
+    <tr>
+      <th>NWS</th>
+      <td>2385.0</td>
+      <td>0.001279</td>
+      <td>0.001190</td>
+      <td>0.000305</td>
+      <td>0.000323</td>
+      <td>0.000365</td>
+      <td>0.000406</td>
+      <td>0.000529</td>
+      <td>0.000737</td>
+      <td>0.001217</td>
+      <td>0.003598</td>
+      <td>0.003821</td>
+      <td>0.004124</td>
+      <td>0.005438</td>
+      <td>1.361596</td>
+      <td>0.166981</td>
+      <td>0.930498</td>
+      <td>0.000688</td>
+      <td>0.005133</td>
+    </tr>
+    <tr>
+      <th>NVR</th>
+      <td>2385.0</td>
+      <td>0.001141</td>
+      <td>0.001090</td>
+      <td>0.000000</td>
+      <td>0.000001</td>
+      <td>0.000002</td>
+      <td>0.000003</td>
+      <td>0.000008</td>
+      <td>0.001055</td>
+      <td>0.001808</td>
+      <td>0.002527</td>
+      <td>0.002993</td>
+      <td>0.004388</td>
+      <td>0.008584</td>
+      <td>1.162880</td>
+      <td>2.814998</td>
+      <td>0.955053</td>
+      <td>0.001800</td>
+      <td>0.008584</td>
+    </tr>
+    <tr>
+      <th>AMCR</th>
+      <td>1400.0</td>
+      <td>0.000942</td>
+      <td>0.000135</td>
+      <td>0.000000</td>
+      <td>0.000766</td>
+      <td>0.000802</td>
+      <td>0.000823</td>
+      <td>0.000857</td>
+      <td>0.000913</td>
+      <td>0.001014</td>
+      <td>0.001082</td>
+      <td>0.001119</td>
+      <td>0.001372</td>
+      <td>0.002597</td>
+      <td>3.051218</td>
+      <td>27.485890</td>
+      <td>0.143126</td>
+      <td>0.000157</td>
+      <td>0.002597</td>
+    </tr>
+    <tr>
+      <th>WBD</th>
+      <td>685.0</td>
+      <td>0.000942</td>
+      <td>0.000244</td>
+      <td>0.000385</td>
+      <td>0.000501</td>
+      <td>0.000626</td>
+      <td>0.000675</td>
+      <td>0.000758</td>
+      <td>0.000893</td>
+      <td>0.001158</td>
+      <td>0.001289</td>
+      <td>0.001361</td>
+      <td>0.001445</td>
+      <td>0.002014</td>
+      <td>0.539766</td>
+      <td>-0.052539</td>
+      <td>0.259164</td>
+      <td>0.000400</td>
+      <td>0.001630</td>
+    </tr>
+    <tr>
+      <th>F</th>
+      <td>2385.0</td>
+      <td>0.000911</td>
+      <td>0.000266</td>
+      <td>0.000000</td>
+      <td>0.000489</td>
+      <td>0.000625</td>
+      <td>0.000677</td>
+      <td>0.000765</td>
+      <td>0.000841</td>
+      <td>0.000997</td>
+      <td>0.001171</td>
+      <td>0.001446</td>
+      <td>0.002011</td>
+      <td>0.002491</td>
+      <td>2.010339</td>
+      <td>6.038443</td>
+      <td>0.292489</td>
+      <td>0.000231</td>
+      <td>0.002491</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+NOTE: We identify a small number of NEGATIVE spreads: Percentage of negative spreads: 0.0212%. 
+
+After looking at individual cases, this error seems to be related to tracking errors coming from the source (CRSP) database. 
+For those values, their average is in the order of 1e-4, so we can set them to 0. 
+
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                    2,385 dates × 500 stocks
+Total data points:        1,192,500
+Non-NaN values:           1,110,743 (93.14%)
+NaN values:               81,757 (6.86%)
+Date range:               2015-07-13 to 2024-12-31
+Time span:                3460 days
+
+STATISTICAL SUMMARY (Top 10 stocks by mean)
+----------------------------------------
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>count</th>
+      <th>mean</th>
+      <th>std</th>
+      <th>min</th>
+      <th>1%</th>
+      <th>5%</th>
+      <th>10%</th>
+      <th>25%</th>
+      <th>50%</th>
+      <th>75%</th>
+      <th>90%</th>
+      <th>95%</th>
+      <th>99%</th>
+      <th>max</th>
+      <th>skewness</th>
+      <th>kurtosis</th>
+      <th>cv</th>
+      <th>iqr</th>
+      <th>range</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>TPL</th>
+      <td>1000.0</td>
+      <td>0.002959</td>
+      <td>0.002639</td>
+      <td>0.000000</td>
+      <td>0.000004</td>
+      <td>0.000006</td>
+      <td>0.000007</td>
+      <td>0.000827</td>
+      <td>0.002622</td>
+      <td>0.004400</td>
+      <td>0.006183</td>
+      <td>0.007549</td>
+      <td>0.011712</td>
+      <td>0.019529</td>
+      <td>1.406919</td>
+      <td>3.910738</td>
+      <td>0.891864</td>
+      <td>0.003573</td>
+      <td>0.019529</td>
+    </tr>
+    <tr>
+      <th>ENPH</th>
+      <td>2385.0</td>
+      <td>0.002044</td>
+      <td>0.002632</td>
+      <td>0.000032</td>
+      <td>0.000055</td>
+      <td>0.000093</td>
+      <td>0.000165</td>
+      <td>0.000345</td>
+      <td>0.000728</td>
+      <td>0.002550</td>
+      <td>0.005965</td>
+      <td>0.008019</td>
+      <td>0.009999</td>
+      <td>0.017699</td>
+      <td>1.889714</td>
+      <td>3.679117</td>
+      <td>1.287499</td>
+      <td>0.002205</td>
+      <td>0.017667</td>
+    </tr>
+    <tr>
+      <th>ERIE</th>
+      <td>2385.0</td>
+      <td>0.001813</td>
+      <td>0.001247</td>
+      <td>0.000039</td>
+      <td>0.000054</td>
+      <td>0.000409</td>
+      <td>0.000623</td>
+      <td>0.000976</td>
+      <td>0.001541</td>
+      <td>0.002346</td>
+      <td>0.003373</td>
+      <td>0.004117</td>
+      <td>0.006011</td>
+      <td>0.010851</td>
+      <td>1.907674</td>
+      <td>6.420565</td>
+      <td>0.687525</td>
+      <td>0.001370</td>
+      <td>0.010812</td>
+    </tr>
+    <tr>
+      <th>LEN</th>
+      <td>2385.0</td>
+      <td>0.001450</td>
+      <td>0.001114</td>
+      <td>0.000058</td>
+      <td>0.000077</td>
+      <td>0.000124</td>
+      <td>0.000165</td>
+      <td>0.000559</td>
+      <td>0.001285</td>
+      <td>0.002056</td>
+      <td>0.002879</td>
+      <td>0.003630</td>
+      <td>0.004771</td>
+      <td>0.009265</td>
+      <td>1.170994</td>
+      <td>2.247405</td>
+      <td>0.768721</td>
+      <td>0.001497</td>
+      <td>0.009207</td>
+    </tr>
+    <tr>
+      <th>SMCI</th>
+      <td>2036.0</td>
+      <td>0.001291</td>
+      <td>0.001026</td>
+      <td>0.000010</td>
+      <td>0.000093</td>
+      <td>0.000273</td>
+      <td>0.000341</td>
+      <td>0.000467</td>
+      <td>0.001002</td>
+      <td>0.001959</td>
+      <td>0.002387</td>
+      <td>0.002780</td>
+      <td>0.004919</td>
+      <td>0.009592</td>
+      <td>2.176456</td>
+      <td>9.949104</td>
+      <td>0.794723</td>
+      <td>0.001492</td>
+      <td>0.009582</td>
+    </tr>
+    <tr>
+      <th>NWS</th>
+      <td>2385.0</td>
+      <td>0.001279</td>
+      <td>0.001190</td>
+      <td>0.000305</td>
+      <td>0.000323</td>
+      <td>0.000365</td>
+      <td>0.000406</td>
+      <td>0.000529</td>
+      <td>0.000737</td>
+      <td>0.001217</td>
+      <td>0.003598</td>
+      <td>0.003821</td>
+      <td>0.004124</td>
+      <td>0.005438</td>
+      <td>1.361596</td>
+      <td>0.166981</td>
+      <td>0.930498</td>
+      <td>0.000688</td>
+      <td>0.005133</td>
+    </tr>
+    <tr>
+      <th>NVR</th>
+      <td>2385.0</td>
+      <td>0.001141</td>
+      <td>0.001090</td>
+      <td>0.000000</td>
+      <td>0.000001</td>
+      <td>0.000002</td>
+      <td>0.000003</td>
+      <td>0.000008</td>
+      <td>0.001055</td>
+      <td>0.001808</td>
+      <td>0.002527</td>
+      <td>0.002993</td>
+      <td>0.004388</td>
+      <td>0.008584</td>
+      <td>1.162880</td>
+      <td>2.814998</td>
+      <td>0.955053</td>
+      <td>0.001800</td>
+      <td>0.008584</td>
+    </tr>
+    <tr>
+      <th>AMCR</th>
+      <td>1400.0</td>
+      <td>0.000942</td>
+      <td>0.000135</td>
+      <td>0.000000</td>
+      <td>0.000766</td>
+      <td>0.000802</td>
+      <td>0.000823</td>
+      <td>0.000857</td>
+      <td>0.000913</td>
+      <td>0.001014</td>
+      <td>0.001082</td>
+      <td>0.001119</td>
+      <td>0.001372</td>
+      <td>0.002597</td>
+      <td>3.051218</td>
+      <td>27.485890</td>
+      <td>0.143126</td>
+      <td>0.000157</td>
+      <td>0.002597</td>
+    </tr>
+    <tr>
+      <th>WBD</th>
+      <td>685.0</td>
+      <td>0.000942</td>
+      <td>0.000244</td>
+      <td>0.000385</td>
+      <td>0.000501</td>
+      <td>0.000626</td>
+      <td>0.000675</td>
+      <td>0.000758</td>
+      <td>0.000893</td>
+      <td>0.001158</td>
+      <td>0.001289</td>
+      <td>0.001361</td>
+      <td>0.001445</td>
+      <td>0.002014</td>
+      <td>0.539766</td>
+      <td>-0.052539</td>
+      <td>0.259164</td>
+      <td>0.000400</td>
+      <td>0.001630</td>
+    </tr>
+    <tr>
+      <th>F</th>
+      <td>2385.0</td>
+      <td>0.000911</td>
+      <td>0.000269</td>
+      <td>-0.001076</td>
+      <td>0.000489</td>
+      <td>0.000625</td>
+      <td>0.000677</td>
+      <td>0.000765</td>
+      <td>0.000841</td>
+      <td>0.000997</td>
+      <td>0.001171</td>
+      <td>0.001446</td>
+      <td>0.002011</td>
+      <td>0.002491</td>
+      <td>1.808106</td>
+      <td>6.924255</td>
+      <td>0.295316</td>
+      <td>0.000231</td>
+      <td>0.003567</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:              0.0003
+Global median:            0.0002
+Global std:               0.0004
+Global skewness:          10.0622
+Global kurtosis:          342.1081 (excess)
+Global min:               0.0000
+Global max:               0.0426
+Global 1st percentile:    0.0000
+Global 99th percentile:   0.0016
+
+TIME SERIES ANALYSIS
+----------------------------------------
+Average daily mean:       0.0003
+Average daily std:        0.0004
+Average daily count:      465.7 stocks
+Min daily count:          430 stocks
+Max daily count:          500 stocks
+
+STOCK-LEVEL ANALYSIS
+----------------------------------------
+Average stock mean:       0.0003
+Average stock std:        0.0003
+Average stock count:      2221.5 observations
+Min stock count:          124 observations
+Max stock count:          2385 observations
+
+ EXTREME VALUES ANALYSIS
+----------------------------------------
+Top 5 stocks by mean value:
+  1. TPL: 0.0030
+  2. ENPH: 0.0020
+  3. ERIE: 0.0018
+  4. LEN: 0.0014
+  5. SMCI: 0.0013
+
+Top 5 stocks by volatility (std):
+  1. TPL: 0.0026
+  2. ENPH: 0.0026
+  3. AMD: 0.0013
+  4. ERIE: 0.0012
+  5. NWS: 0.0012
+
+Top 5 stocks by data completeness:
+  1. A: 2385 observations
+  2. AAPL: 2385 observations
+  3. ABBV: 2385 observations
+  4. ABT: 2385 observations
+  5. ACGL: 2385 observations
+
+
+[ADD PLOTS]
+
+
+
+
+SHORT FEE DATA:
+
+The data for short fee was gathered for 500 stocks from a scraping process taken from Interactive Brokers' 'Stock Loan Availability Database'. 
+
+Generally, cost to borrow abides by:
+- General Collateral stocks are highly liquid securities readily available to borrow and lend in the Securities Lending market. Note: General Collateral stock may become Hard-to-Borrow due to changing market conditions.
+- Hard-to-Borrows are securities that may not be readily available to transact in the Securities Lending market due to factors such as low liquidity, elevated demand for borrow, heightened volatility or regulatory restrictions.
+
+We also have access to availability data, which is currently not used in the backtesting framework. 
+
+The data given by IBKR contains nans for some stocks, and some dates. 
+After filtering for the 428 stocks that are currently in the no nan prices data, we get:
+
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+total_stocks                  : 428  # Total number of stocks in the dataset
+total_dates                   : 2,385  # Total number of trading dates in the dataset
+total_span_days               : 3,460  # Total calendar days from earliest to latest date
+stocks_no_nans                : 0  # Stocks with no missing data (100% complete)
+stocks_with_nans              : 428  # Stocks with at least one missing value
+stocks_internal_gaps_only     : 406  # Stocks that span full period but have gaps in middle
+stocks_born_late              : 22  # Stocks that start after the earliest date in dataset
+stocks_dead_early             : 0  # Stocks that end before the latest date in dataset
+stocks_middle_only            : 0  # Stocks that both start late and end early
+stocks_full_period            : 406  # Stocks that span the entire dataset time period
+stocks_complete_coverage      : 0  # Stocks with no gaps in their own time series (100% completeness)
+avg_missing_%                 : 4.42  # Average percentage of missing data across all stocks
+median_missing_%              : 2.22  # Median percentage of missing data across all stocks
+max_missing_%                 : 97.36  # Highest percentage of missing data for any single stock
+min_missing_%                 : 2.22  # Lowest percentage of missing data for any single stock
+std_missing_%                 : 11.47  # Standard deviation of missing percentages across stocks
+total_missing_values          : 45,074  # Total count of all missing data points
+total_data_points             : 1,020,780  # Total possible data points (dates × stocks)
+overall_completeness_%        : 95.58  # Percentage of all possible data points that are present
+
+
+
+Number of stocks with <10% NaNs: 410
+
+
+Short fees tend to be the same for around a week, sometimes much more, sometimes less. For the purpose of this data, we forward fill up to 5 days. This gives us:
+
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+total_stocks                  : 428  # Total number of stocks in the dataset
+total_dates                   : 2,385  # Total number of trading dates in the dataset
+total_span_days               : 3,460  # Total calendar days from earliest to latest date
+stocks_no_nans                : 406  # Stocks with no missing data (100% complete)
+stocks_with_nans              : 22  # Stocks with at least one missing value
+stocks_internal_gaps_only     : 0  # Stocks that span full period but have gaps in middle
+stocks_born_late              : 22  # Stocks that start after the earliest date in dataset
+stocks_dead_early             : 0  # Stocks that end before the latest date in dataset
+stocks_middle_only            : 0  # Stocks that both start late and end early
+stocks_full_period            : 406  # Stocks that span the entire dataset time period
+stocks_complete_coverage      : 428  # Stocks with no gaps in their own time series (100% completeness)
+avg_missing_%                 : 2.24  # Average percentage of missing data across all stocks
+median_missing_%              : 0.00  # Median percentage of missing data across all stocks
+max_missing_%                 : 97.32  # Highest percentage of missing data for any single stock
+min_missing_%                 : 0.00  # Lowest percentage of missing data for any single stock
+std_missing_%                 : 11.83  # Standard deviation of missing percentages across stocks
+total_missing_values          : 22,850  # Total count of all missing data points
+total_data_points             : 1,020,780  # Total possible data points (dates × stocks)
+overall_completeness_%        : 97.76  # Percentage of all possible data points that are present
+
+
+Finally, we keep the 406 stocks with no missing data, as filling more than 5 days would not be accurate. We could also fallback to a 5%/360 value to be conservative. 
+
+================================================================================
+COMPREHENSIVE NaN DIAGNOSTICS REPORT
+================================================================================
+
+OVERALL SUMMARY
+--------------------------------------------------------------------------------
+total_stocks                  : 428  # Total number of stocks in the dataset
+total_dates                   : 2,385  # Total number of trading dates in the dataset
+total_span_days               : 3,460  # Total calendar days from earliest to latest date
+stocks_no_nans                : 406  # Stocks with no missing data (100% complete)
+stocks_with_nans              : 22  # Stocks with at least one missing value
+stocks_internal_gaps_only     : 0  # Stocks that span full period but have gaps in middle
+stocks_born_late              : 22  # Stocks that start after the earliest date in dataset
+stocks_dead_early             : 0  # Stocks that end before the latest date in dataset
+stocks_middle_only            : 0  # Stocks that both start late and end early
+stocks_full_period            : 406  # Stocks that span the entire dataset time period
+stocks_complete_coverage      : 428  # Stocks with no gaps in their own time series (100% completeness)
+avg_missing_%                 : 2.24  # Average percentage of missing data across all stocks
+median_missing_%              : 0.00  # Median percentage of missing data across all stocks
+max_missing_%                 : 97.32  # Highest percentage of missing data for any single stock
+min_missing_%                 : 0.00  # Lowest percentage of missing data for any single stock
+std_missing_%                 : 11.83  # Standard deviation of missing percentages across stocks
+total_missing_values          : 22,850  # Total count of all missing data points
+total_data_points             : 1,020,780  # Total possible data points (dates × stocks)
+overall_completeness_%        : 97.76  # Percentage of all possible data points that are present
+
+We now have 406 stocks with no missing data for all the dates. 
+
+======================================================================
+COMPREHENSIVE DATA EXPLORATION REPORT
+======================================================================
+
+DATASET OVERVIEW
+----------------------------------------
+Shape:                    2,385 dates × 406 stocks
+Total data points:        968,310
+Non-NaN values:           968,310 (100.00%)
+NaN values:               0 (0.00%)
+Date range:               2015-07-13 to 2024-12-31
+Time span:                3460 days
+
+STATISTICAL SUMMARY (Top 10 stocks by mean)
+----------------------------------------
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>count</th>
+      <th>mean</th>
+      <th>std</th>
+      <th>min</th>
+      <th>1%</th>
+      <th>5%</th>
+      <th>10%</th>
+      <th>25%</th>
+      <th>50%</th>
+      <th>75%</th>
+      <th>90%</th>
+      <th>95%</th>
+      <th>99%</th>
+      <th>max</th>
+      <th>skewness</th>
+      <th>kurtosis</th>
+      <th>cv</th>
+      <th>iqr</th>
+      <th>range</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>ENPH</th>
+      <td>2385.0</td>
+      <td>5.543774</td>
+      <td>9.107038</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.3701</td>
+      <td>7.4445</td>
+      <td>17.62922</td>
+      <td>30.21540</td>
+      <td>36.495684</td>
+      <td>47.8668</td>
+      <td>2.025853</td>
+      <td>3.466003</td>
+      <td>1.642751</td>
+      <td>7.1945</td>
+      <td>47.6168</td>
+    </tr>
+    <tr>
+      <th>TSLA</th>
+      <td>2385.0</td>
+      <td>1.482315</td>
+      <td>3.715493</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.3232</td>
+      <td>1.0447</td>
+      <td>2.59376</td>
+      <td>7.60602</td>
+      <td>18.554500</td>
+      <td>44.9540</td>
+      <td>6.014871</td>
+      <td>47.106898</td>
+      <td>2.506547</td>
+      <td>0.7947</td>
+      <td>44.7040</td>
+    </tr>
+    <tr>
+      <th>AMD</th>
+      <td>2385.0</td>
+      <td>0.932497</td>
+      <td>3.158986</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2624</td>
+      <td>0.4237</td>
+      <td>0.89872</td>
+      <td>2.50000</td>
+      <td>12.762600</td>
+      <td>44.6650</td>
+      <td>8.843254</td>
+      <td>95.175935</td>
+      <td>3.387662</td>
+      <td>0.1737</td>
+      <td>44.4150</td>
+    </tr>
+    <tr>
+      <th>CCL</th>
+      <td>2385.0</td>
+      <td>0.700059</td>
+      <td>3.140209</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2620</td>
+      <td>0.3497</td>
+      <td>0.48030</td>
+      <td>0.98300</td>
+      <td>10.498864</td>
+      <td>59.7629</td>
+      <td>12.254794</td>
+      <td>178.475721</td>
+      <td>4.485634</td>
+      <td>0.0997</td>
+      <td>59.5129</td>
+    </tr>
+    <tr>
+      <th>LDOS</th>
+      <td>2385.0</td>
+      <td>0.594403</td>
+      <td>2.393965</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2586</td>
+      <td>0.4081</td>
+      <td>0.58846</td>
+      <td>0.96422</td>
+      <td>7.500800</td>
+      <td>44.8596</td>
+      <td>13.012543</td>
+      <td>188.586674</td>
+      <td>4.027510</td>
+      <td>0.1581</td>
+      <td>44.6096</td>
+    </tr>
+    <tr>
+      <th>IFF</th>
+      <td>2385.0</td>
+      <td>0.557852</td>
+      <td>1.370258</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2613</td>
+      <td>0.3997</td>
+      <td>0.74564</td>
+      <td>1.41796</td>
+      <td>6.986348</td>
+      <td>25.0308</td>
+      <td>10.539718</td>
+      <td>148.898173</td>
+      <td>2.456312</td>
+      <td>0.1497</td>
+      <td>24.7808</td>
+    </tr>
+    <tr>
+      <th>SYF</th>
+      <td>2385.0</td>
+      <td>0.544412</td>
+      <td>1.818622</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2500</td>
+      <td>0.3501</td>
+      <td>0.49788</td>
+      <td>1.00000</td>
+      <td>4.415000</td>
+      <td>33.1060</td>
+      <td>10.504907</td>
+      <td>123.419968</td>
+      <td>3.340525</td>
+      <td>0.1001</td>
+      <td>32.8560</td>
+    </tr>
+    <tr>
+      <th>VRSN</th>
+      <td>2385.0</td>
+      <td>0.448699</td>
+      <td>0.448775</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.3065</td>
+      <td>0.5841</td>
+      <td>0.78984</td>
+      <td>0.86598</td>
+      <td>1.292536</td>
+      <td>11.0385</td>
+      <td>15.557915</td>
+      <td>340.441916</td>
+      <td>1.000170</td>
+      <td>0.3341</td>
+      <td>10.7885</td>
+    </tr>
+    <tr>
+      <th>WAB</th>
+      <td>2385.0</td>
+      <td>0.445159</td>
+      <td>0.411357</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2906</td>
+      <td>0.4117</td>
+      <td>0.85200</td>
+      <td>1.24332</td>
+      <td>2.077720</td>
+      <td>7.3904</td>
+      <td>5.517555</td>
+      <td>55.384144</td>
+      <td>0.924068</td>
+      <td>0.1617</td>
+      <td>7.1404</td>
+    </tr>
+    <tr>
+      <th>ACN</th>
+      <td>2385.0</td>
+      <td>0.434007</td>
+      <td>1.184555</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.25</td>
+      <td>0.2500</td>
+      <td>0.2778</td>
+      <td>0.37500</td>
+      <td>0.48142</td>
+      <td>6.024912</td>
+      <td>22.5065</td>
+      <td>11.153003</td>
+      <td>150.282623</td>
+      <td>2.729342</td>
+      <td>0.0278</td>
+      <td>22.2565</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+VALUE DISTRIBUTION STATISTICS
+----------------------------------------
+Global mean:              0.3229
+Global median:            0.2500
+Global std:               0.6991
+Global skewness:          44.7814
+Global kurtosis:          3236.0611 (excess)
+Global min:               0.0000
+Global max:               117.1414
+Global 1st percentile:    0.2500
+Global 99th percentile:   1.0000
+
+TIME SERIES ANALYSIS
+----------------------------------------
+Average daily mean:       0.3229
+Average daily std:        0.4465
+Average daily count:      406.0 stocks
+Min daily count:          406 stocks
+Max daily count:          406 stocks
+
+STOCK-LEVEL ANALYSIS
+----------------------------------------
+Average stock mean:       0.3229
+Average stock std:        0.2501
+Average stock count:      2385.0 observations
+Min stock count:          2385 observations
+Max stock count:          2385 observations
+
+EXTREME VALUES ANALYSIS
+----------------------------------------
+Top 5 stocks by mean value:
+  1. ENPH: 5.5438
+  2. TSLA: 1.4823
+  3. AMD: 0.9325
+  4. CCL: 0.7001
+  5. LDOS: 0.5944
+
+Top 5 stocks by volatility (std):
+  1. ENPH: 9.1070
+  2. TSLA: 3.7155
+  3. AMD: 3.1590
+  4. CCL: 3.1402
+  5. ECL: 2.8964
+
+Top 5 stocks by data completeness:
+  1. A: 2385 observations
+  2. AAPL: 2385 observations
+  3. ABBV: 2385 observations
+  4. ABT: 2385 observations
+  5. ACGL: 2385 observations
+
+
+
