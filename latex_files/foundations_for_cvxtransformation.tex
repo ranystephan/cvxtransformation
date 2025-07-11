@@ -1,0 +1,284 @@
+\documentclass[11pt, letterpaper]{article}
+
+% --- PACKAGES ---
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{geometry}
+\usepackage{booktabs} % For professional tables
+\usepackage[hidelinks]{hyperref}
+
+\geometry{letterpaper, margin=1in}
+\linespread{1.1}
+
+% --- Custom Commands ---
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+
+% --- DOCUMENT ---
+\begin{document}
+
+\title{\textbf{Foundations for Optimal Portfolio Transformation}}
+\author{Rany Stephan \\ \small{Project Outline for Prof. Stephen Boyd}}
+\date{\today}
+\maketitle
+
+\begin{abstract}
+This document outlines the foundational concepts, data requirements, and baseline policies for a project on optimal portfolio transformation. The goal is to establish a rigorous yet practical framework for developing and evaluating advanced trading strategies (Single-Period and MPC) against simple, realistic benchmarks. We focus on the practical considerations of an institutional portfolio manager, including transaction costs, market impact, and the distinction between forecasted and realized data. The implementation includes four transformation policies and comprehensive backtesting infrastructure with detailed cost tracking and performance analysis.
+\end{abstract}
+
+\section{Problem Statement and Core Concepts}
+
+The central problem is to optimally manage the transition of a large institutional portfolio, with a Net Asset Value (NAV) on the order of millions or billions of dollars, from a given initial state $\vect{w}^{init} \in \R^n$ to a final target state $\vect{w}^{tar} \in \R^n$ over a fixed horizon of $T$ trading periods.
+
+\subsection{Units and Scale: Weights vs. Dollar Value}
+The optimisation is carried out in 
+weights.  Let $\vect{w}_t\in\R^n$ denote the vector of 
+portfolio weights expressed as fractions of the current NAV, and let $c_t$ be the
+cash weight.  The budget constraint therefore reads $\mathbf{1}^\top\vect{w}_t+c_t=1$.
+Given the NAV in dollars $V_t$, dollar holdings are
+$\vect{h}_t = V_t\vect{w}_t$.  All transaction and holding
+costs are debited on these dollar quantities even though the optimisation is
+scale–invariant.
+
+\subsection{Cash Accounting and Costs}
+A critical component of a realistic simulation is explicitly charging all costs to the cash account. When a policy decides to execute a trade $\vect{z}_t$, the portfolio's cash balance is affected in three ways:
+\begin{enumerate}
+    \item The net value of the assets bought and sold: $-\mathbf{1}^\top (V_t \vect{z}_t)$.
+    \item The transaction costs for executing the trade, $C_{\text{trade}}(V_t \vect{z}_t)$.
+    \item The holding costs for the post-trade portfolio, $C_{\text{hold}}(V_t \vect{w}_{t+1})$.
+\end{enumerate}
+The post-trade cash value is therefore $h_{t, \text{cash}}' = h_{t, \text{cash}} - \mathbf{1}^\top \vect{h}_{t,\text{trade}} - C_{\text{trade}} - C_{\text{hold}}$. Trading costs are typically measured in \textbf{basis points (bips)}, where 1 bp = 0.01\% = 0.0001. For example, a 1.5 bip spread cost on a \$1,000,000 trade is $\$1,000,000 \times 1.5 \times 10^{-4} = \$150$.
+
+\subsection{Simulation: Predicted vs. Realised Values}
+The trading logic is split into two layers.  The policy—our "brain''—sees only
+forecasts at time~$t$: the conditional mean $\hat{\vect{r}}_t$, the covariance
+$\hat{\Sigma}_t$ and the cost parameters $\hat{\vect{\kappa}}$.  It outputs a
+desired trade $\vect{z}_t$.  The market simulator—our "world''—executes that
+order using the realised return $\vect{r}_t$, spreads, volumes and short-fees,
+updates holdings to $\vect{w}_{t+1}$, charges the realised costs to cash and
+feeds the new state back to the policy.
+
+\section{Data Requirements and Sources}
+To build a realistic simulator and informed policy, we require several types of data, typically stored in `pandas` DataFrames with a `DatetimeIndex`.
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Data Type} & \textbf{Source} & \textbf{Implementation Notes} \\ \midrule
+Prices & \verb|data_ranycs/prices_cleaned.csv| & Daily close prices. Used to calculate returns. \\
+Volume & \verb|data_ranycs/volume_cleaned.csv| & Daily share volume. Used for participation limits. \\
+Spreads & \verb|data_ranycs/spread_cleaned.csv| & Half–spreads inferred from bid/ask quotes. \\
+Borrow Costs & \verb|data_ranycs/short_fee_data_cleaned.csv| & Annual short-borrowing fees (bips) converted to daily decimal. \\
+Risk-Free Rate & \verb|data_ranycs/rf.csv| & Daily risk-free rate (decimal). \\
+Shares Outstanding & (not used in current implementation) & — \\
+\bottomrule
+\end{tabular}
+\caption{Data sources and implementation details.}
+\end{table}
+
+\subsection{Data Processing Pipeline}
+Raw CRSP and Refinitiv files are first aligned by asset 
+and date; short gaps are filled forward/backward and assets with excessive
+missing values are dropped.  The first row is removed to eliminate the~\texttt{NaN}
+created by the return calculation, and we finally restrict to the intersection
+of assets that appear in \\emph{all} data sets, yielding a fully populated panel
+for prices, spreads, volumes, shorting fees and the risk-free rate.
+
+\subsection{Forecasting Methodology}
+The backtesting infrastructure implements several forecasting approaches:
+
+\subsubsection{Return Forecasting}
+Uses synthetic returns with configurable information ratio:
+\begin{align}
+\hat{\vect{r}}_t &= \alpha \cdot (\vect{r}_{t-1} + \vect{\epsilon}_t) \\
+\alpha &= \frac{\text{IR}^2}{\text{IR}^2 + 1} \\
+\vect{\epsilon}_t &\sim \mathcal{N}(0, \sigma^2_{\epsilon})
+\end{align}
+where IR is the target information ratio (default: 0.15).
+
+\subsubsection{Covariance Forecasting}
+Uses exponentially weighted moving average (EWMA) with half-life of 125 days:
+\begin{equation}
+\hat{\Sigma}_t = \lambda \hat{\Sigma}_{t-1} + (1-\lambda) \vect{r}_{t-1} \vect{r}_{t-1}^\top
+\end{equation}
+where $\lambda = 0.5^{1/125} \approx 0.994$.
+
+\subsubsection{Cost Forecasting}
+\begin{itemize}
+    \item \textbf{Spread Costs}: Uses realized spreads from previous periods
+    \item \textbf{Shorting Fees}: Uses actual shorting fee data, converted from annual bips to daily decimal
+    \item \textbf{Interest Rates}: Uses realized risk-free rates
+\end{itemize}
+
+\section{Implemented Transformation Policies}
+
+\subsection{Baseline 1: Uniform Trading}
+This is the most primitive strategy. It completely ignores all risk, costs, and market information. At each step, it simply trades a constant fraction of the total required trade.
+The trade vector at each period $t \in \{0, \dots, T-1\}$ is given by:
+\[
+\vect{z}_t = \frac{\vect{w}^{tar} - \vect{w}^{init}}{T}
+\]
+The final portfolio is guaranteed to be $\vect{w}^{tar}$ only if there are no market returns; in reality, market drift will cause a deviation. The total realized cost of this policy serves as a high-water mark to beat.
+
+\subsection{Baseline 2: Dynamic Uniform Trading}
+This policy recalculates the required transformation at each step based on current state, accounting for market drift:
+\[
+\vect{z}_t = \frac{\vect{w}^{tar} - \vect{w}_t}{T - t}
+\]
+where $\vect{w}_t$ is the current portfolio weight after market returns.
+
+\subsection{Baseline 3: Univariate Scalar Tracking}
+This policy is a significant step up from uniform trading but is still much simpler than a full multi-asset optimization. It is myopic (single-period) and, crucially, it optimizes the trade for each asset \textit{independently}, ignoring all cross-asset correlations.
+
+At each time $t$, for each asset $i$, we solve the following simple scalar optimization problem:
+\begin{align*}
+\min_{z_{i,t}} \quad & \frac{\lambda}{2}\hat{\sigma}_i^2 \left(w_{i,t+1} - w_{i,t+1}^{\text{path}}\right)^2 + \hat{\kappa}_i^{\text{spr}} |z_{i,t}| \\
+\text{subject to} \quad & w_{i,t+1} = w_{i,t} + z_{i,t} \\
+& |z_{i,t}| \le \beta_i \hat{v}_{i,t} \quad \text{(Participation limit)}
+\end{align*}
+Here, $\lambda$ is a scalar risk-aversion parameter (default $\lambda=1$), $\hat{\sigma}_i^2$ is the predicted variance for asset $i$, and $w_{i,t+1}^{\text{path}}$ is the corresponding component of the linear flight path.
+
+\subsection{Advanced Policy: Flight Path Tracking}
+This policy implements the full convex optimization formulation that exactly follows the flight path tracker. At each day $t$ it solves:
+
+\begin{align*}
+\min_{\vect{w}_{t+1}, \vect{z}_t} \quad & \|\hat{\Sigma}^{1/2} (\vect{w}_{t+1} - \vect{w}^{\text{path}}_{t+1})\|_2 \quad \text{(tracking risk)} \\
+& + \gamma_{\text{trade}} \cdot \hat{\vect{\kappa}}^{\text{spr}} \cdot |\vect{z}_t| \\
+& + \gamma_{\text{hold}} \cdot (\hat{\vect{\kappa}}^{\text{short}} \cdot (-\vect{w}_{t+1})_+ + \hat{\kappa}^{\text{borrow}} \cdot (-c_{t+1})_+) \\
+\text{subject to} \quad & \|\vect{w}_{t+1}\|_1 \le L_{\max} \quad \text{(leverage limit)} \\
+& \frac{1}{2}\|\vect{z}_t\|_1 \le T_{\max} \quad \text{(turnover limit)} \\
+& |z_{i,t}| \le \beta \cdot v_{i,t} \quad \text{(participation limit)} \\
+& w_{\min} \le \vect{w}_{t+1} \le w_{\max} \quad \text{(position limits)} \\
+& c_{\min} \le c_{t+1} \le c_{\max} \quad \text{(cash limits)} \\
+& \vect{w}_{t+1}^\top \hat{\Sigma} \vect{w}_{t+1} \le \sigma^2_{\max} \quad \text{(risk limit)} \\
+& \mathbf{1}^\top \vect{w}_{t+1} + c_{t+1} = 1 \quad \text{(budget constraint)}
+\end{align*}
+
+The flight path is defined as:
+\[
+\vect{w}^{\text{path}}_{t+1} = (1 - \frac{t+1}{T}) \vect{w}^{\text{init}} + \frac{t+1}{T} \vect{w}^{\text{tar}}
+\]
+
+\section{Backtesting Infrastructure}
+
+\subsection{Core Backtesting Engine}
+The implementation includes a comprehensive backtesting framework with the following key components:
+
+\subsubsection{Data Management}
+Data loading is cached and automatically aligns every DataFrame.  Unless
+stated otherwise we use a 500-day look-back window, 5-day forward smoothing for
+return forecasts, and add a $10^{-6}$ diagonal regularisation to each
+covariance estimate to ensure positive definiteness.
+
+\subsubsection{Portfolio Simulation}
+The simulator converts target weights to share quantities, applies half-spreads
+to compute transaction costs, accrues interest on cash and short-borrow fees,
+and updates positions after every trade.
+
+\subsubsection{Performance Tracking}
+For every run we record the time–series of portfolio value, returns, volatility,
+Sharpe ratio, maximum draw-down, turnover, transaction costs, leverage,
+tracking error and the full history of trades and weights.
+
+\section{Completed Experiments}
+
+\subsection{Disjoint Asset Groups Experiment}
+This experiment tests portfolio transformations between disjoint groups of assets with different risk characteristics. It explores how different transformation policies perform when moving between distinct asset universes.
+
+\subsubsection{Asset Group Formation}
+Assets are partitioned into four mutually exclusive buckets—the lowest and
+highest volatility quartiles, the top Sharpe-ratio names and the least
+correlated names—allowing us to study transformations between fundamentally
+different universes.
+
+\subsubsection{Transformation Scenarios}
+\begin{enumerate}
+    \item \textbf{Low Vol to High Vol}: Transform from low volatility to high volatility assets
+    \item \textbf{High Sharpe to Low Correlation}: Transform from high Sharpe assets to low correlation assets
+\end{enumerate}
+
+\subsubsection{Key Findings}
+Dynamic uniform trading benefits from drift adjustment, the flight-path tracker
+achieves the best risk-adjusted performance, and the scalar tracker offers a
+favourable cost–risk trade-off when the dimensionality is large.
+
+\subsection{Liquidation Experiment}
+This experiment tests portfolio transformation policies in liquidation scenarios, where portfolios are gradually liquidated to zero over time.
+
+\subsubsection{Portfolio Types}
+We consider diversified, concentrated, long/short and momentum portfolios so
+as to test the robustness of each policy across a wide range of starting
+conditions.
+
+\subsubsection{Liquidation Periods}
+Tests multiple liquidation horizons: 5, 10, 20, 30, and 50 days to understand the impact of time pressure on transformation performance.
+
+\subsubsection{Key Findings}
+\begin{itemize}
+    \item Shorter liquidation periods increase transaction costs but reduce market risk exposure
+    \item Flight path tracking shows superior performance in high-pressure liquidation scenarios
+    \item Concentrated portfolios require more sophisticated transformation strategies
+\end{itemize}
+
+\subsection{Volume--Adaptive Transformation Experiment}
+Recent code in \texttt{experiments/main\_experiments/volume\_adaptive\_experiment.py}
+implements a study where the execution horizon adapts to prevailing liquidity.
+Assets are ranked by a proxy for trading activity and scenarios allocate
+capital toward (or away from) the high-volume segment.  Preliminary results
+show that respecting volume tiers can materially lower costs without
+sacrificing risk control.
+
+\section{Potential Future Experiments}
+
+\subsection{Market Impact Experiments}
+\begin{itemize}
+    \item \textbf{Volume-Adaptive Trading}: Adjust participation rates based on market volume
+    \item \textbf{Impact Modeling}: Incorporate permanent and temporary market impact
+    \item \textbf{Cross-Asset Impact}: Model impact spillovers between related assets
+\end{itemize}
+
+\subsection{Multi-Period Optimization}
+\begin{itemize}
+    \item \textbf{MPC Implementation}: Model Predictive Control with rolling optimization
+    \item \textbf{Scenario Planning}: Multi-scenario optimization under uncertainty
+    \item \textbf{Dynamic Programming}: Full dynamic programming solution for small problems
+\end{itemize}
+
+\subsection{Advanced Cost Models}
+\begin{itemize}
+    \item \textbf{Non-linear Costs}: Implement non-linear transaction cost models
+    \item \textbf{Market Microstructure}: Incorporate order book dynamics
+    \item \textbf{Regulatory Costs}: Include regulatory constraints and costs
+\end{itemize}
+
+\subsection{Alternative Asset Classes}
+\begin{itemize}
+    \item \textbf{Fixed Income}: Extend to bond portfolio transformations
+    \item \textbf{Options}: Include options in transformation strategies
+    \item \textbf{Cryptocurrencies}: Test with high-volatility crypto assets
+\end{itemize}
+
+\section{Implementation Architecture}
+
+\subsection{Code Structure}
+The implementation follows a modular architecture:
+\begin{itemize}
+    \item \textbf{Core Module}: Backtesting engine, data loading, and utility functions
+    \item \textbf{Transformation Module}: Policy implementations and strategy creation
+    \item \textbf{Enhanced Backtest}: Detailed tracking and dashboard creation
+    \item \textbf{Experiments}: Specific experiment configurations and execution
+    \item \textbf{Dashboard}: Visualization and analysis tools
+\end{itemize}
+
+\subsection{Key Design Principles}
+\begin{itemize}
+    \item \textbf{Separation of Concerns}: Clear separation between policy and simulator
+    \item \textbf{Modularity}: Policies can be easily swapped and compared
+    \item \textbf{Extensibility}: Easy to add new policies and experiments
+    \item \textbf{Reproducibility}: Deterministic results with proper seeding
+    \item \textbf{Performance}: Efficient vectorized operations and caching
+\end{itemize}
+
+\end{document}
